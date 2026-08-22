@@ -15,22 +15,23 @@ shape:
 
 ```
 openvoice/<domain>/
-  base.py        # Abstract interface (Protocol or ABC) — the only thing
-                  # business logic depends on.
+  base.py               # Abstract interface (Protocol or ABC) — the only thing
+                         # business logic depends on.
   providers/
-    anthropic.py  # Concrete implementation
-    openai.py
-    self_hosted.py
-  factory.py      # get_<domain>_provider(settings) -> Base<Domain>Provider
+    anthropic.py         # Concrete implementation
+    openai_compatible.py  # Also backs any OpenAI-compatible endpoint
+  factory.py             # get_<domain>_provider(settings) -> Base<Domain>Provider
 ```
 
 Business logic (call handling, appointment booking, CRM) depends only on
 `base.py`'s interface, obtained through the factory. The factory reads the
 provider choice from `Settings` (environment variables) — switching from
-Anthropic to a self-hosted vLLM model is a config change, never a code
-change. This is what `docs/adr/0001-record-architecture-decisions.md`
-establishes as the standing convention; provider-specific ADRs reference it
-instead of re-justifying the pattern.
+Anthropic to DeepSeek, Kimi, Qwen, or a self-hosted vLLM model is a config
+change (`LLM_PROVIDER=openai_compatible` + a base URL/model/API key), never
+a code change; no model is ever hardcoded. This is what
+`docs/adr/0001-record-architecture-decisions.md` establishes as the
+standing convention; provider-specific ADRs reference it instead of
+re-justifying the pattern.
 
 ## Call lifecycle
 

@@ -1,10 +1,12 @@
 """OpenAI Chat Completions provider.
 
-Also backs the `self_hosted` provider: any OpenAI-compatible server (vLLM,
-llama.cpp server, etc.) is reachable by pointing `base_url` at it. There is
-no separate self-hosted class because the wire protocol and error handling
-are identical — only the endpoint and whether an API key is required
-differ, both of which are plain constructor parameters.
+Also backs the `openai_compatible` provider (`LLMProvider.OPENAI_COMPATIBLE`):
+any endpoint that speaks the OpenAI Chat Completions protocol is reachable
+by pointing `base_url` at it — DeepSeek, Moonshot/Kimi, Alibaba Qwen
+(DashScope), Groq, Together AI, or a self-hosted vLLM/llama.cpp/Ollama
+server. There is no separate class per vendor because the wire protocol
+and error handling are identical — only the endpoint, model name, and
+whether an API key is required differ, all plain constructor parameters.
 """
 
 from collections.abc import Sequence

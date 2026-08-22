@@ -15,8 +15,9 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
   (structlog).
 - Database models (`Client`, `Call`, `Appointment`, `CallTranscript`) +
   Alembic migration.
-- Pluggable LLM architecture (Anthropic, OpenAI, self-hosted
-  OpenAI-compatible) behind a `BaseLLMProvider` interface + factory.
+- Pluggable LLM architecture (Anthropic, OpenAI, and any OpenAI-compatible
+  endpoint — DeepSeek, Kimi, Qwen, Groq, self-hosted vLLM/Ollama) behind a
+  `BaseLLMProvider` interface + factory.
 - Pluggable STT (faster-whisper) and TTS (Piper, ElevenLabs) behind
   `BaseSTTProvider`/`BaseTTSProvider` interfaces + factories.
 - Conversational agent core: intent detection, per-call history,
@@ -38,6 +39,29 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
   post-call summary against a real Postgres, every external service faked.
 - Community infrastructure: issue/PR templates, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, good-first-issue list in `CONTRIBUTING.md`.
+
+### Fixed
+
+- **Blank optional `.env` values were silently breaking config.** Every
+  field `.env.example` ships as `KEY=` (no value) — by design, so
+  contributors can see what's configurable — was being read by
+  pydantic-settings as the literal empty string `""`, not "unset". That
+  silently broke every `is None` check reading an unset-but-present key
+  (e.g. `AGENT_SYSTEM_PROMPT=` produced an empty system prompt instead of
+  the real default; `GOOGLE_SERVICE_ACCOUNT_JSON_PATH=` produced a
+  confusing "package not installed" error instead of the intended
+  "credential missing" one). Fixed at the root with
+  `env_ignore_empty=True` on `Settings.model_config`, plus a regression
+  test, rather than patching each affected call site individually.
+
+### Changed
+
+- Renamed the `self_hosted` LLM provider to `openai_compatible`
+  (`LLM_PROVIDER=openai_compatible`, `OPENAI_COMPATIBLE_BASE_URL`/`_MODEL`/
+  `_API_KEY`) and fixed a real bug where its API key was hardcoded to
+  `None` — hosted OpenAI-compatible providers requiring auth (DeepSeek,
+  Kimi, Qwen, Groq, ...) were previously unreachable through this path.
+  See [ADR 0004](docs/adr/0004-generalize-self-hosted-llm-to-openai-compatible.md).
 
 ### Known gaps
 

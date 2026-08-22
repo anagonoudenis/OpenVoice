@@ -1,4 +1,4 @@
-"""Tests for OpenAICompatibleLLMProvider (backs both `openai` and `self_hosted`)."""
+"""Tests for OpenAICompatibleLLMProvider (backs both `openai` and `openai_compatible`)."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -99,7 +99,8 @@ async def test_generate_does_not_retry_non_retryable_error(
     assert mock_create.call_count == 1
 
 
-async def test_self_hosted_style_construction_without_api_key() -> None:
+async def test_local_server_style_construction_without_api_key() -> None:
+    """A self-hosted vLLM/Ollama server typically needs no auth at all."""
     provider = OpenAICompatibleLLMProvider(
         api_key=None,
         model="mistral-7b",
@@ -114,3 +115,17 @@ async def test_self_hosted_style_construction_without_api_key() -> None:
     result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert result.content == "local response"
+
+
+async def test_hosted_compatible_provider_style_construction_with_api_key() -> None:
+    """DeepSeek/Kimi/Qwen/Groq-style: a hosted endpoint that requires a real key."""
+    provider = OpenAICompatibleLLMProvider(
+        api_key="sk-real-key",
+        model="deepseek-chat",
+        timeout_seconds=5.0,
+        max_retries=1,
+        base_url="https://api.deepseek.com/v1",
+    )
+
+    assert provider._client.api_key == "sk-real-key"
+    assert str(provider._client.base_url) == "https://api.deepseek.com/v1/"

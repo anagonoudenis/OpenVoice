@@ -23,11 +23,21 @@ class Environment(StrEnum):
 
 
 class LLMProvider(StrEnum):
-    """Supported LLM backends, selected purely via configuration."""
+    """Supported LLM backends, selected purely via configuration.
+
+    ``OPENAI_COMPATIBLE`` is deliberately generic, not a single vendor:
+    it covers any endpoint that speaks the OpenAI Chat Completions
+    protocol, which in practice means self-hosted inference (vLLM,
+    llama.cpp server, Ollama) *and* hosted providers that expose an
+    OpenAI-compatible API — DeepSeek, Moonshot/Kimi, Alibaba Qwen
+    (DashScope), Groq, Together AI, and others. Nothing in this codebase
+    hardcodes a specific model; which one runs is entirely a config
+    choice (``OPENAI_COMPATIBLE_BASE_URL`` / ``_MODEL`` / `_API_KEY``).
+    """
 
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
-    SELF_HOSTED = "self_hosted"
+    OPENAI_COMPATIBLE = "openai_compatible"
 
 
 class TTSProvider(StrEnum):
@@ -77,6 +87,19 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # `.env.example` (and any `.env` copied from it) ships every
+        # optional field as `KEY=` with no value, by design, so a user can
+        # see what's configurable without having to add it themselves. By
+        # pydantic-settings' own default (`env_ignore_empty=False`), an
+        # empty string is a real value, not "unset" -- it would satisfy an
+        # `Optional[str]` field as `""` rather than falling through to the
+        # field's `None` default, silently breaking every `is None` check
+        # and any provider (LLM prompt, calendar credentials, ...) reading
+        # that field. Setting this to True restores the intended "blank
+        # means use the default" behavior everywhere, once, instead of
+        # requiring every optional field's every reader to remember to
+        # check falsiness instead of identity.
+        env_ignore_empty=True,
     )
 
     environment: Environment = Environment.LOCAL
@@ -104,8 +127,9 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o"
-    self_hosted_llm_base_url: str | None = None
-    self_hosted_llm_model: str | None = None
+    openai_compatible_base_url: str | None = None
+    openai_compatible_model: str | None = None
+    openai_compatible_api_key: str | None = None
     llm_request_timeout_seconds: float = 15.0
     llm_max_retries: int = 3
 
@@ -159,8 +183,18 @@ class Settings(BaseSettings):
             raise ValueError("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic")
         if self.llm_provider is LLMProvider.OPENAI and not self.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
-        if self.llm_provider is LLMProvider.SELF_HOSTED and not self.self_hosted_llm_base_url:
-            raise ValueError("SELF_HOSTED_LLM_BASE_URL is required when LLM_PROVIDER=self_hosted")
+        if self.llm_provider is LLMProvider.OPENAI_COMPATIBLE and not (
+            self.openai_compatible_base_url and self.openai_compatible_model
+        ):
+            raise ValueError(
+                "OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_MODEL are both required "
+                "when LLM_PROVIDER=openai_compatible -- there's no universal default model "
+                "across providers, so it must be set explicitly (e.g. base_url "
+                "https://api.deepseek.com/v1 with model deepseek-chat, "
+                "https://api.moonshot.ai/v1 with a kimi-* model, "
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1 with a qwen-* model, "
+                "or a local vLLM/Ollama server with whatever model it's serving)"
+            )
         return self
 
     @model_validator(mode="after")

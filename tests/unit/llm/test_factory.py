@@ -29,11 +29,31 @@ def test_openai_provider_selected_via_config(monkeypatch: pytest.MonkeyPatch) ->
     assert isinstance(provider, OpenAICompatibleLLMProvider)
 
 
-def test_self_hosted_provider_selected_via_config(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openai_compatible_provider_selected_via_config(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(
         monkeypatch,
-        LLM_PROVIDER="self_hosted",
-        SELF_HOSTED_LLM_BASE_URL="http://localhost:8001/v1",
+        LLM_PROVIDER="openai_compatible",
+        OPENAI_COMPATIBLE_BASE_URL="https://api.deepseek.com/v1",
+        OPENAI_COMPATIBLE_MODEL="deepseek-chat",
+        OPENAI_COMPATIBLE_API_KEY="test-key",
+    )
+    provider = get_llm_provider(settings)
+    assert isinstance(provider, OpenAICompatibleLLMProvider)
+    # The API key must actually reach the client -- this used to be hardcoded
+    # to None for this provider, which silently broke any hosted
+    # OpenAI-compatible service (DeepSeek, Kimi, Qwen, ...) that requires auth.
+    assert provider._client.api_key == "test-key"
+
+
+def test_openai_compatible_provider_works_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local vLLM/Ollama server typically needs no auth at all."""
+    settings = _settings(
+        monkeypatch,
+        LLM_PROVIDER="openai_compatible",
+        OPENAI_COMPATIBLE_BASE_URL="http://localhost:8001/v1",
+        OPENAI_COMPATIBLE_MODEL="llama-3.1-8b",
     )
     provider = get_llm_provider(settings)
     assert isinstance(provider, OpenAICompatibleLLMProvider)

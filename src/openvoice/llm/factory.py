@@ -3,7 +3,10 @@
 The only place in the codebase that maps `Settings.llm_provider` to a
 concrete implementation. Everything downstream (agent core, intent
 detection, summaries) depends on `BaseLLMProvider`, obtained by calling
-`get_llm_provider(settings)` — swapping providers is a config change.
+`get_llm_provider(settings)` — swapping providers, or switching to a
+different model entirely (DeepSeek, Kimi, Qwen, Groq, a self-hosted
+vLLM/Ollama server, ...) via `LLM_PROVIDER=openai_compatible`, is a
+config change, never a code change.
 """
 
 from openvoice.config import LLMProvider, Settings
@@ -40,15 +43,21 @@ def get_llm_provider(settings: Settings) -> BaseLLMProvider:
             max_retries=settings.llm_max_retries,
         )
 
-    if settings.llm_provider is LLMProvider.SELF_HOSTED:
-        if settings.self_hosted_llm_base_url is None:  # pragma: no cover -- guarded by Settings
-            raise RuntimeError("SELF_HOSTED_LLM_BASE_URL missing despite LLM_PROVIDER=self_hosted")
+    if settings.llm_provider is LLMProvider.OPENAI_COMPATIBLE:
+        if settings.openai_compatible_base_url is None:  # pragma: no cover
+            raise RuntimeError(
+                "OPENAI_COMPATIBLE_BASE_URL missing despite LLM_PROVIDER=openai_compatible"
+            )
+        if settings.openai_compatible_model is None:  # pragma: no cover
+            raise RuntimeError(
+                "OPENAI_COMPATIBLE_MODEL missing despite LLM_PROVIDER=openai_compatible"
+            )
         return OpenAICompatibleLLMProvider(
-            api_key=None,
-            model=settings.self_hosted_llm_model or "default",
+            api_key=settings.openai_compatible_api_key,
+            model=settings.openai_compatible_model,
             timeout_seconds=settings.llm_request_timeout_seconds,
             max_retries=settings.llm_max_retries,
-            base_url=settings.self_hosted_llm_base_url,
+            base_url=settings.openai_compatible_base_url,
         )
 
     raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")  # pragma: no cover
