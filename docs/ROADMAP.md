@@ -22,7 +22,8 @@ the next begins.
        is complete and unit tested; it is not yet wired into a multi-turn
        voice conversation (LLM tool-calling/slot-filling for "what day
        works for you?") — exposed via the REST API instead (Step 9).
-8. [ ] Lightweight CRM: caller recognition by phone number, call history,
+8. [x] Lightweight CRM: caller recognition by phone number (via the SIP
+       `sip.phoneNumber` participant attribute), call history,
        Celery-based post-call summaries.
 9. [ ] REST API + OpenAPI docs; `/health` with real DB/Redis/LiveKit checks.
 10. [ ] End-to-end integration tests (fully mocked simulated call).

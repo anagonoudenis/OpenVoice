@@ -25,11 +25,13 @@ from livekit.plugins import silero
 from openvoice.agent.conversation import ConversationManager
 from openvoice.agent.prompts import build_system_prompt
 from openvoice.config import get_settings
+from openvoice.crm.service import CRMService
 from openvoice.db.models import Call, CallDirection, CallStatus, CallTranscript, SpeakerRole
 from openvoice.db.session import get_sessionmaker
 from openvoice.llm.factory import get_llm_provider
 from openvoice.logging import configure_logging
 from openvoice.stt.factory import get_stt_provider
+from openvoice.tasks.summarize_call import summarize_call_task
 from openvoice.telephony.livekit_agent import OpenVoiceAgent
 from openvoice.tts.factory import get_tts_provider
 
@@ -78,6 +80,20 @@ async def _transfer_to_human(
         log.error("transfer_to_human_failed", error=str(exc))
 
 
+def _caller_phone_number(ctx: JobContext) -> str | None:
+    """Read the caller's number off the inbound SIP participant, if any.
+
+    `sip.phoneNumber` is the participant attribute LiveKit's SIP
+    integration sets on inbound calls (see LiveKit's SIP participant
+    attributes reference).
+    """
+    for participant in ctx.room.remote_participants.values():
+        phone_number = participant.attributes.get("sip.phoneNumber")
+        if phone_number:
+            return phone_number
+    return None
+
+
 @server.rtc_session(agent_name="openvoice-agent")
 async def entrypoint(ctx: JobContext) -> None:
     settings = get_settings()
@@ -97,10 +113,22 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     vad_provider = silero.VAD.load()
 
+    crm = CRMService()
+    phone_number = _caller_phone_number(ctx)
+
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as db_session:
+        client_id = None
+        if phone_number is not None:
+            client = await crm.get_or_create_client(
+                db_session=db_session, phone_number=phone_number
+            )
+            client_id = client.id
+            log = log.bind(client_id=str(client_id))
+
         call_row = Call(
             id=call_id,
+            client_id=client_id,
             livekit_room_name=ctx.room.name,
             direction=CallDirection.INBOUND,
             status=CallStatus.IN_PROGRESS,
@@ -134,6 +162,11 @@ async def entrypoint(ctx: JobContext) -> None:
                 )
             await db_session.commit()
         log.info("call_finalized")
+
+        try:
+            summarize_call_task.delay(str(call_id))
+        except Exception as exc:  # broker unreachable etc. must not fail call teardown
+            log.error("summarize_call_dispatch_failed", error=str(exc))
 
     ctx.add_shutdown_callback(finalize_call)
 

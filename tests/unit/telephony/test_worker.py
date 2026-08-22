@@ -1,10 +1,9 @@
-"""Tests for `openvoice.telephony.worker._transfer_to_human`.
+"""Tests for `openvoice.telephony.worker._transfer_to_human`/`_caller_phone_number`.
 
 The `entrypoint` function itself is integration-glue that needs a live
 `JobContext`/`AgentSession`/room (see the module docstring) and isn't
-exercised here; `_transfer_to_human` is pure enough (given a mocked
-`LiveKitAPI`) to unit test properly, including its error-swallowing
-fallback behavior.
+exercised here; `_transfer_to_human` and `_caller_phone_number` are pure
+enough (given a mocked `LiveKitAPI`/a fake room) to unit test properly.
 """
 
 from types import SimpleNamespace
@@ -101,3 +100,25 @@ async def test_transfer_to_human_swallows_errors(monkeypatch: pytest.MonkeyPatch
 
     # Must not raise: a failed transfer must never crash the call.
     await worker._transfer_to_human(room_name="room-1", transfer_number="+15551234567", log=_log())
+
+
+def _ctx_with_participants(*attributes_list: dict[str, str]) -> SimpleNamespace:
+    participants = {
+        str(i): SimpleNamespace(attributes=attrs) for i, attrs in enumerate(attributes_list)
+    }
+    return SimpleNamespace(room=SimpleNamespace(remote_participants=participants))
+
+
+def test_caller_phone_number_reads_sip_attribute() -> None:
+    ctx = _ctx_with_participants({"sip.phoneNumber": "+15551230000"})
+    assert worker._caller_phone_number(ctx) == "+15551230000"  # type: ignore[arg-type]
+
+
+def test_caller_phone_number_returns_none_when_absent() -> None:
+    ctx = _ctx_with_participants({"other.attr": "x"})
+    assert worker._caller_phone_number(ctx) is None  # type: ignore[arg-type]
+
+
+def test_caller_phone_number_returns_none_for_no_participants() -> None:
+    ctx = _ctx_with_participants()
+    assert worker._caller_phone_number(ctx) is None  # type: ignore[arg-type]

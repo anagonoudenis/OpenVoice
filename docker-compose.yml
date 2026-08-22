@@ -49,6 +49,25 @@ services:
     volumes:
       - ./src:/app/src
 
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["uv", "run", "celery", "-A", "openvoice.tasks.celery_app", "worker", "--loglevel=info"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://openvoice:openvoice@postgres:5432/openvoice
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+
 volumes:
   postgres_data:
   redis_data:

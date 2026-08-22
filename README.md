@@ -53,6 +53,17 @@ SIP trunk + dispatch rule configured for inbound/outbound telephony — see
 for what is and isn't verified in this integration, and smoke-test a real
 call before relying on it in production.
 
+### Background jobs (post-call summaries)
+
+Post-call summaries run via Celery, not inline in the call, so they never
+delay hangup or block the worker's event loop:
+
+```bash
+uv run celery -A openvoice.tasks.celery_app worker --loglevel=info
+```
+
+(Also available as the `celery-worker` service in `docker compose up`.)
+
 ## Development
 
 ```bash
