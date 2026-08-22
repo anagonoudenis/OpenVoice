@@ -12,7 +12,7 @@ the next begins.
        Alembic migrations + tests.
 4. [x] Pluggable LLM architecture (interface + Anthropic/OpenAI/self-hosted
        providers + factory + mocked tests).
-5. [ ] Pluggable STT/TTS interfaces (faster-whisper, Piper, + mocks).
+5. [x] Pluggable STT/TTS interfaces (faster-whisper, Piper, ElevenLabs + mocks).
 6. [ ] LiveKit call pipeline: inbound/outbound calls, VAD, barge-in,
        STT→LLM→TTS loop, human handoff fallback.
 7. [ ] Appointment booking: Google Calendar integration, alternative-slot

@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     tts_provider: TTSProvider = TTSProvider.PIPER
     deepgram_api_key: str | None = None
     elevenlabs_api_key: str | None = None
+    elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    elevenlabs_model: str = "eleven_turbo_v2_5"
+    faster_whisper_model_size: str = "small"
+    faster_whisper_device: str = "cpu"
+    faster_whisper_compute_type: str = "int8"
+    piper_voice_model_path: str = "models/piper/en_US-amy-medium.onnx"
 
     # --- Observability -------------------------------------------------------
     sentry_dsn: str | None = None
