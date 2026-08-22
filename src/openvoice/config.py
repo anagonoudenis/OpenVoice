@@ -45,6 +45,24 @@ class STTProvider(StrEnum):
     DEEPGRAM = "deepgram"
 
 
+class CalendarProvider(StrEnum):
+    """Supported calendar backends. Google first; Outlook/Cal.com later."""
+
+    GOOGLE = "google"
+
+
+class SMSProvider(StrEnum):
+    """Supported SMS backends."""
+
+    TWILIO = "twilio"
+
+
+class EmailProvider(StrEnum):
+    """Supported email backends."""
+
+    RESEND = "resend"
+
+
 class Settings(BaseSettings):
     """Central application settings, validated once at startup.
 
@@ -109,6 +127,27 @@ class Settings(BaseSettings):
     agent_max_history_turns: int = 20
     agent_human_transfer_number: str | None = None
 
+    # --- Calendar / booking (pluggable) ---------------------------------------
+    calendar_provider: CalendarProvider = CalendarProvider.GOOGLE
+    google_calendar_id: str = "primary"
+    google_service_account_json_path: str | None = None
+    booking_business_hours_start: int = 9
+    booking_business_hours_end: int = 17
+    booking_default_duration_minutes: int = 30
+    booking_search_days_ahead: int = 7
+    booking_timezone: str = "UTC"
+
+    # --- SMS / email notifications (pluggable) --------------------------------
+    sms_provider: SMSProvider = SMSProvider.TWILIO
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_from_number: str | None = None
+    email_provider: EmailProvider = EmailProvider.RESEND
+    resend_api_key: str | None = None
+    resend_from_email: str | None = None
+    notification_request_timeout_seconds: float = 10.0
+    notification_max_retries: int = 3
+
     # --- Observability -------------------------------------------------------
     sentry_dsn: str | None = None
     log_level: str = "INFO"
@@ -130,6 +169,16 @@ class Settings(BaseSettings):
         if self.tts_provider is TTSProvider.ELEVENLABS and not self.elevenlabs_api_key:
             raise ValueError("ELEVENLABS_API_KEY is required when TTS_PROVIDER=elevenlabs")
         return self
+
+    # Note: calendar/SMS/email credentials are deliberately NOT validated
+    # here at startup, unlike the LLM/TTS providers. Booking and
+    # notifications are an optional sub-feature (a CRM-only or
+    # support-only deployment shouldn't be forced to configure Google
+    # Calendar just to boot); their factories
+    # (`openvoice.calendar.factory.get_calendar_provider`,
+    # `openvoice.notifications.factory.get_sms_provider`/
+    # `get_email_provider`) raise a clear `RuntimeError` if invoked
+    # without the credentials the selected provider needs.
 
 
 @lru_cache

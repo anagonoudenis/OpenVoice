@@ -104,6 +104,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S105", "S106"]
+# Fakes here mimic the Google API client's own camelCase kwargs (calendarId, eventId).
+"tests/unit/calendar/test_google_calendar_provider.py" = ["N803"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["openvoice"]
@@ -125,7 +127,15 @@ show_error_codes = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["celery.*", "livekit.*", "faster_whisper.*", "piper.*", "alembic.*"]
+module = [
+    "celery.*",
+    "livekit.*",
+    "faster_whisper.*",
+    "piper.*",
+    "alembic.*",
+    "google.oauth2.*",
+    "googleapiclient.*",
+]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

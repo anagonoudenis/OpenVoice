@@ -17,8 +17,11 @@ the next begins.
        STT→LLM→TTS loop, human handoff fallback. Not yet smoke-tested
        against a live LiveKit server/SIP trunk (see ADR 0003) — do this
        before relying on it for real calls.
-7. [ ] Appointment booking: Google Calendar integration, alternative-slot
-       suggestion, SMS/email confirmation, cancel/reschedule via voice.
+7. [x] Appointment booking: Google Calendar integration, alternative-slot
+       suggestion, SMS/email confirmation, cancel/reschedule. `BookingService`
+       is complete and unit tested; it is not yet wired into a multi-turn
+       voice conversation (LLM tool-calling/slot-filling for "what day
+       works for you?") — exposed via the REST API instead (Step 9).
 8. [ ] Lightweight CRM: caller recognition by phone number, call history,
        Celery-based post-call summaries.
 9. [ ] REST API + OpenAPI docs; `/health` with real DB/Redis/LiveKit checks.
