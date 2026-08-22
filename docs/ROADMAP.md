@@ -30,7 +30,9 @@ the next begins.
        LiveKit TCP reachability check (informational, since the API
        process itself doesn't need LiveKit — only the telephony worker
        does).
-10. [ ] End-to-end integration tests (fully mocked simulated call).
+10. [x] End-to-end integration tests: a full simulated call (intake -> STT ->
+        LLM -> TTS -> booking -> transcript persistence -> post-call
+        summary) against a real Postgres, every external service faked.
 11. [ ] Docs finalized: README quickstart, CONTRIBUTING, ARCHITECTURE, this
         roadmap.
 
