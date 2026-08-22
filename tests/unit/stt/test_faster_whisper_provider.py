@@ -42,13 +42,13 @@ async def _frames(chunks: list[bytes]) -> AsyncIterator[bytes]:
 
 
 async def test_transcribe_stream_joins_segments() -> None:
-    model = _FakeModel(["Bonjour ", "le monde"])
+    model = _FakeModel(["Hello ", "world"])
     provider = FasterWhisperSTTProvider(model=model)
 
     pcm = np.array([0, 1000, -1000], dtype=np.int16).tobytes()
     results = [seg async for seg in provider.transcribe_stream(_frames([pcm]))]
 
-    assert results == [TranscriptSegment(text="Bonjour le monde", is_final=True, language=None)]
+    assert results == [TranscriptSegment(text="Hello world", is_final=True, language=None)]
     assert model.received_audio is not None
     assert model.received_audio.dtype == np.float32
 

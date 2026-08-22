@@ -23,7 +23,7 @@ async def test_synthesize_returns_audio_bytes(
 ) -> None:
     httpx_mock.add_response(content=b"raw-pcm-audio")
 
-    chunks = [c async for c in provider.synthesize("Bonjour")]
+    chunks = [c async for c in provider.synthesize("Hello")]
 
     assert chunks == [b"raw-pcm-audio"]
     request = httpx_mock.get_requests()[0]
@@ -36,7 +36,7 @@ async def test_synthesize_uses_override_voice(
 ) -> None:
     httpx_mock.add_response(content=b"audio")
 
-    [c async for c in provider.synthesize("Bonjour", voice="voice-2")]
+    [c async for c in provider.synthesize("Hello", voice="voice-2")]
 
     request = httpx_mock.get_requests()[0]
     assert "/text-to-speech/voice-2" in str(request.url)
@@ -48,7 +48,7 @@ async def test_synthesize_retries_on_503_then_succeeds(
     httpx_mock.add_response(status_code=503)
     httpx_mock.add_response(content=b"audio-after-retry")
 
-    chunks = [c async for c in provider.synthesize("Bonjour")]
+    chunks = [c async for c in provider.synthesize("Hello")]
 
     assert chunks == [b"audio-after-retry"]
     assert len(httpx_mock.get_requests()) == 2
@@ -62,7 +62,7 @@ async def test_synthesize_raises_after_exhausting_retries(
     httpx_mock.add_response(status_code=503)
 
     with pytest.raises(TTSError):
-        [c async for c in provider.synthesize("Bonjour")]
+        [c async for c in provider.synthesize("Hello")]
 
     assert len(httpx_mock.get_requests()) == 3
 
@@ -73,6 +73,6 @@ async def test_synthesize_does_not_retry_auth_error(
     httpx_mock.add_response(status_code=401)
 
     with pytest.raises(TTSError):
-        [c async for c in provider.synthesize("Bonjour")]
+        [c async for c in provider.synthesize("Hello")]
 
     assert len(httpx_mock.get_requests()) == 1

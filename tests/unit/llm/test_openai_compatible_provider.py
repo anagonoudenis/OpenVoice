@@ -32,12 +32,12 @@ def provider() -> OpenAICompatibleLLMProvider:
 
 async def test_generate_returns_response(provider: OpenAICompatibleLLMProvider) -> None:
     provider._client.chat.completions.create = AsyncMock(  # type: ignore[method-assign]
-        return_value=_fake_response("Bonjour !")
+        return_value=_fake_response("Hello!")
     )
 
-    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
-    assert result.content == "Bonjour !"
+    assert result.content == "Hello!"
     assert result.model == "gpt-4o"
     assert result.input_tokens == 10
     assert result.output_tokens == 5
@@ -50,12 +50,12 @@ async def test_generate_prepends_system_message_when_given(
     provider._client.chat.completions.create = mock_create  # type: ignore[method-assign]
 
     await provider.generate(
-        [LLMMessage(role=LLMMessageRole.USER, content="Salut")],
-        system_prompt="Tu es un assistant vocal.",
+        [LLMMessage(role=LLMMessageRole.USER, content="Hi")],
+        system_prompt="You are a voice assistant.",
     )
 
     sent_messages = mock_create.call_args.kwargs["messages"]
-    assert sent_messages[0] == {"role": "system", "content": "Tu es un assistant vocal."}
+    assert sent_messages[0] == {"role": "system", "content": "You are a voice assistant."}
 
 
 async def test_generate_retries_transient_error_then_succeeds(
@@ -66,7 +66,7 @@ async def test_generate_retries_transient_error_then_succeeds(
     )
     provider._client.chat.completions.create = mock_create  # type: ignore[method-assign]
 
-    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert result.content == "ok"
     assert mock_create.call_count == 2
@@ -79,7 +79,7 @@ async def test_generate_raises_provider_error_after_exhausting_retries(
     provider._client.chat.completions.create = mock_create  # type: ignore[method-assign]
 
     with pytest.raises(LLMProviderError):
-        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert mock_create.call_count == 3
 
@@ -94,7 +94,7 @@ async def test_generate_does_not_retry_non_retryable_error(
     provider._client.chat.completions.create = mock_create  # type: ignore[method-assign]
 
     with pytest.raises(LLMProviderError):
-        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert mock_create.call_count == 1
 
@@ -108,9 +108,9 @@ async def test_self_hosted_style_construction_without_api_key() -> None:
         base_url="http://localhost:8001/v1",
     )
     provider._client.chat.completions.create = AsyncMock(  # type: ignore[method-assign]
-        return_value=_fake_response("réponse locale")
+        return_value=_fake_response("local response")
     )
 
-    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
-    assert result.content == "réponse locale"
+    assert result.content == "local response"

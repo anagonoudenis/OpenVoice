@@ -31,11 +31,11 @@ def provider() -> AnthropicLLMProvider:
 
 
 async def test_generate_returns_response(provider: AnthropicLLMProvider) -> None:
-    provider._client.messages.create = AsyncMock(return_value=_fake_response("Bonjour !"))  # type: ignore[method-assign]
+    provider._client.messages.create = AsyncMock(return_value=_fake_response("Hello!"))  # type: ignore[method-assign]
 
-    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
-    assert result.content == "Bonjour !"
+    assert result.content == "Hello!"
     assert result.model == "claude-sonnet-5"
     assert result.input_tokens == 10
     assert result.output_tokens == 5
@@ -46,18 +46,18 @@ async def test_generate_passes_system_prompt_when_given(provider: AnthropicLLMPr
     provider._client.messages.create = mock_create  # type: ignore[method-assign]
 
     await provider.generate(
-        [LLMMessage(role=LLMMessageRole.USER, content="Salut")],
-        system_prompt="Tu es un assistant vocal.",
+        [LLMMessage(role=LLMMessageRole.USER, content="Hi")],
+        system_prompt="You are a voice assistant.",
     )
 
-    assert mock_create.call_args.kwargs["system"] == "Tu es un assistant vocal."
+    assert mock_create.call_args.kwargs["system"] == "You are a voice assistant."
 
 
 async def test_generate_omits_system_key_when_not_given(provider: AnthropicLLMProvider) -> None:
     mock_create = AsyncMock(return_value=_fake_response())
     provider._client.messages.create = mock_create  # type: ignore[method-assign]
 
-    await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+    await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert "system" not in mock_create.call_args.kwargs
 
@@ -70,7 +70,7 @@ async def test_generate_retries_transient_error_then_succeeds(
     )
     provider._client.messages.create = mock_create  # type: ignore[method-assign]
 
-    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert result.content == "ok"
     assert mock_create.call_count == 2
@@ -83,7 +83,7 @@ async def test_generate_raises_provider_error_after_exhausting_retries(
     provider._client.messages.create = mock_create  # type: ignore[method-assign]
 
     with pytest.raises(LLMProviderError):
-        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert mock_create.call_count == 3
 
@@ -96,6 +96,6 @@ async def test_generate_does_not_retry_non_retryable_error(provider: AnthropicLL
     provider._client.messages.create = mock_create  # type: ignore[method-assign]
 
     with pytest.raises(LLMProviderError):
-        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Salut")])
+        await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert mock_create.call_count == 1

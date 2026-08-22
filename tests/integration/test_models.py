@@ -51,7 +51,7 @@ async def test_call_with_transcripts_and_client(db_session: AsyncSession) -> Non
         direction=CallDirection.INBOUND,
         status=CallStatus.IN_PROGRESS,
     )
-    call.transcripts.append(CallTranscript(sequence=1, role=SpeakerRole.CALLER, text="Bonjour"))
+    call.transcripts.append(CallTranscript(sequence=1, role=SpeakerRole.CALLER, text="Hello"))
     call.transcripts.append(
         CallTranscript(sequence=2, role=SpeakerRole.AGENT, text="Comment puis-je vous aider ?")
     )

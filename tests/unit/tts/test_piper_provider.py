@@ -37,10 +37,10 @@ async def test_synthesize_yields_chunks_in_order() -> None:
     voice = _FakeVoice([b"chunk1", b"chunk2"])
     provider = PiperTTSProvider(voice=voice)
 
-    chunks = [c async for c in provider.synthesize("Bonjour")]
+    chunks = [c async for c in provider.synthesize("Hello")]
 
     assert chunks == [b"chunk1", b"chunk2"]
-    assert voice.received_text == "Bonjour"
+    assert voice.received_text == "Hello"
 
 
 async def test_synthesize_wraps_backend_errors() -> None:
@@ -48,4 +48,4 @@ async def test_synthesize_wraps_backend_errors() -> None:
     provider = PiperTTSProvider(voice=voice)
 
     with pytest.raises(TTSError):
-        [c async for c in provider.synthesize("Bonjour")]
+        [c async for c in provider.synthesize("Hello")]
