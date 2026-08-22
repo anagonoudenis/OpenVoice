@@ -4,10 +4,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
+from openvoice.api.routers import appointments, calls, clients, health
+from openvoice.booking.service import BookingError
+from openvoice.calendar.base import CalendarError
 from openvoice.config import get_settings
 from openvoice.logging import configure_logging
+from openvoice.notifications.base import NotificationError
 
 logger = structlog.get_logger(__name__)
 
@@ -34,14 +39,28 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    @app.get("/health", tags=["health"])
-    async def health() -> dict[str, str]:
-        """Liveness probe.
+    app.include_router(health.router)
+    app.include_router(clients.router)
+    app.include_router(calls.router)
+    app.include_router(appointments.router)
 
-        Deep dependency checks (DB, Redis, LiveKit) are added once those
-        clients exist; see docs/ROADMAP.md.
-        """
-        return {"status": "ok"}
+    @app.exception_handler(CalendarError)
+    async def _calendar_error_handler(_request: Request, exc: CalendarError) -> JSONResponse:
+        logger.error("calendar_error", error=str(exc))
+        return JSONResponse(status_code=503, content={"detail": f"Calendar unavailable: {exc}"})
+
+    @app.exception_handler(NotificationError)
+    async def _notification_error_handler(
+        _request: Request, exc: NotificationError
+    ) -> JSONResponse:
+        logger.error("notification_error", error=str(exc))
+        return JSONResponse(
+            status_code=502, content={"detail": f"Notification delivery failed: {exc}"}
+        )
+
+    @app.exception_handler(BookingError)
+    async def _booking_error_handler(_request: Request, exc: BookingError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     return app
 

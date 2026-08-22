@@ -110,6 +110,12 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["openvoice"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom (`param: X = Depends(...)`) is a
+# call-in-default-arg by design, not the mutable-default-arg bug B008
+# guards against.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]
+
 # ---------------------------------------------------------------------------
 # mypy (strict)
 # ---------------------------------------------------------------------------

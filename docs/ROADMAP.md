@@ -25,7 +25,11 @@ the next begins.
 8. [x] Lightweight CRM: caller recognition by phone number (via the SIP
        `sip.phoneNumber` participant attribute), call history,
        Celery-based post-call summaries.
-9. [ ] REST API + OpenAPI docs; `/health` with real DB/Redis/LiveKit checks.
+9. [x] REST API + OpenAPI docs (`/clients`, `/calls`, `/appointments`);
+       `/health` with real DB/Redis checks (required) and a best-effort
+       LiveKit TCP reachability check (informational, since the API
+       process itself doesn't need LiveKit — only the telephony worker
+       does).
 10. [ ] End-to-end integration tests (fully mocked simulated call).
 11. [ ] Docs finalized: README quickstart, CONTRIBUTING, ARCHITECTURE, this
         roadmap.
