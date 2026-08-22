@@ -36,7 +36,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --extra voice
       - name: mypy
         run: uv run mypy src
 
@@ -77,7 +77,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           python-version: "3.12"
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --extra voice
       - name: Apply Alembic migrations
         run: uv run alembic upgrade head
       - name: Run tests with coverage

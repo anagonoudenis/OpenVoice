@@ -13,8 +13,10 @@ the next begins.
 4. [x] Pluggable LLM architecture (interface + Anthropic/OpenAI/self-hosted
        providers + factory + mocked tests).
 5. [x] Pluggable STT/TTS interfaces (faster-whisper, Piper, ElevenLabs + mocks).
-6. [ ] LiveKit call pipeline: inbound/outbound calls, VAD, barge-in,
-       STT→LLM→TTS loop, human handoff fallback.
+6. [x] LiveKit call pipeline: inbound/outbound calls, VAD, barge-in,
+       STT→LLM→TTS loop, human handoff fallback. Not yet smoke-tested
+       against a live LiveKit server/SIP trunk (see ADR 0003) — do this
+       before relying on it for real calls.
 7. [ ] Appointment booking: Google Calendar integration, alternative-slot
        suggestion, SMS/email confirmation, cancel/reschedule via voice.
 8. [ ] Lightweight CRM: caller recognition by phone number, call history,

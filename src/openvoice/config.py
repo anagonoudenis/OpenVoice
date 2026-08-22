@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     faster_whisper_compute_type: str = "int8"
     piper_voice_model_path: str = "models/piper/en_US-amy-medium.onnx"
 
+    # --- Agent (per-company, never hardcoded in business logic) --------------
+    agent_company_name: str = "our company"
+    agent_system_prompt: str | None = None
+    agent_max_history_turns: int = 20
+    agent_human_transfer_number: str | None = None
+
     # --- Observability -------------------------------------------------------
     sentry_dsn: str | None = None
     log_level: str = "INFO"

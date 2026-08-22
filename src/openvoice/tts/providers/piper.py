@@ -6,6 +6,10 @@ module only imports it inside `PiperTTSProvider.from_settings`, so
 importing this module never requires the extra to be installed. Tests
 inject a fake voice via the plain constructor.
 
+The `_PiperVoice`/`_PiperAudioChunk` protocols below (`synthesize(text) ->
+Iterable[chunk with .audio_int16_bytes]`) were verified against the real
+installed `piper-tts==1.7.0` API, not guessed.
+
 Piper's synthesis call is blocking/CPU-bound; it always runs via
 `asyncio.to_thread` so it never blocks the event loop serving a live call.
 """
@@ -22,10 +26,15 @@ from openvoice.tts.base import BaseTTSProvider, TTSError
 logger = structlog.get_logger(__name__)
 
 
+class _PiperAudioChunk(Protocol):
+    @property
+    def audio_int16_bytes(self) -> bytes: ...
+
+
 class _PiperVoice(Protocol):
     """Structural type for `piper.PiperVoice`, avoiding a hard import."""
 
-    def synthesize_stream_raw(self, text: str) -> Iterable[bytes]: ...
+    def synthesize(self, text: str) -> Iterable[_PiperAudioChunk]: ...
 
 
 class PiperTTSProvider(BaseTTSProvider):
@@ -49,10 +58,10 @@ class PiperTTSProvider(BaseTTSProvider):
         self, text: str, *, voice: str | None = None, sample_rate: int = 16000
     ) -> AsyncIterator[bytes]:
         try:
-            chunks = await asyncio.to_thread(lambda: list(self._voice.synthesize_stream_raw(text)))
+            chunks = await asyncio.to_thread(lambda: list(self._voice.synthesize(text)))
         except Exception as exc:  # any Piper/onnxruntime failure becomes TTSError
             logger.error("piper_synthesize_failed", error=str(exc))
             raise TTSError(f"Piper synthesis failed: {exc}") from exc
 
         for chunk in chunks:
-            yield chunk
+            yield chunk.audio_int16_bytes

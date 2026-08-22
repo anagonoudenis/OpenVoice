@@ -7,11 +7,17 @@ protocol.
 """
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 import pytest
 
 from openvoice.tts.base import TTSError
 from openvoice.tts.providers.piper import PiperTTSProvider
+
+
+@dataclass
+class _FakeAudioChunk:
+    audio_int16_bytes: bytes
 
 
 class _FakeVoice:
@@ -20,11 +26,11 @@ class _FakeVoice:
         self._fail = fail
         self.received_text: str | None = None
 
-    def synthesize_stream_raw(self, text: str) -> Iterable[bytes]:
+    def synthesize(self, text: str) -> Iterable[_FakeAudioChunk]:
         if self._fail:
             raise RuntimeError("boom")
         self.received_text = text
-        return iter(self._chunks)
+        return (_FakeAudioChunk(audio_int16_bytes=c) for c in self._chunks)
 
 
 async def test_synthesize_yields_chunks_in_order() -> None:

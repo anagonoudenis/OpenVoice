@@ -30,11 +30,28 @@ git clone <this-repo> && cd OpenVoice
 cp .env.example .env          # fill in SECRET_KEY, ANTHROPIC_API_KEY (or OPENAI_API_KEY), etc.
 docker compose up -d postgres redis
 uv sync --group dev
-uv run alembic upgrade head    # once migrations exist (Step 3)
+uv run alembic upgrade head
 uv run uvicorn openvoice.main:app --reload
 ```
 
 Then open http://localhost:8000/health and http://localhost:8000/docs.
+
+### Running the voice agent (real calls)
+
+The API above is call-independent (clients, appointments, CRM). Taking
+actual phone calls is a separate worker process against a LiveKit server:
+
+```bash
+uv sync --extra voice --group dev   # faster-whisper, Piper, LiveKit Agents
+export LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=...
+uv run openvoice-worker              # or: uv run python -m openvoice.telephony.worker
+```
+
+Requires a running LiveKit server (self-hosted or LiveKit Cloud) with a
+SIP trunk + dispatch rule configured for inbound/outbound telephony — see
+[docs/adr/0003-livekit-node-override-integration.md](docs/adr/0003-livekit-node-override-integration.md)
+for what is and isn't verified in this integration, and smoke-test a real
+call before relying on it in production.
 
 ## Development
 

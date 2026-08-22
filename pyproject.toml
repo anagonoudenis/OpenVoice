@@ -66,6 +66,9 @@ dev = [
     "types-redis>=4.6",
 ]
 
+[project.scripts]
+openvoice-worker = "openvoice.telephony.worker:run"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
