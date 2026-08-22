@@ -8,9 +8,9 @@ the next begins.
 1. [x] Project foundations: repo structure, `pyproject.toml`, `.gitignore`,
        README, MIT license, pre-commit.
 2. [x] Config (Pydantic Settings), Docker Compose (Postgres + Redis), CI.
-3. [ ] Database models (`Client`, `Call`, `Appointment`, `CallTranscript`) +
+3. [x] Database models (`Client`, `Call`, `Appointment`, `CallTranscript`) +
        Alembic migrations + tests.
-4. [ ] Pluggable LLM architecture (interface + Anthropic/OpenAI/self-hosted
+4. [x] Pluggable LLM architecture (interface + Anthropic/OpenAI/self-hosted
        providers + factory + mocked tests).
 5. [ ] Pluggable STT/TTS interfaces (faster-whisper, Piper, + mocks).
 6. [ ] LiveKit call pipeline: inbound/outbound calls, VAD, barge-in,

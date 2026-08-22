@@ -78,6 +78,8 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --group dev
+      - name: Apply Alembic migrations
+        run: uv run alembic upgrade head
       - name: Run tests with coverage
         run: uv run pytest --cov-fail-under=85
       - name: Upload coverage report

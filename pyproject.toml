@@ -63,7 +63,6 @@ dev = [
     "pytest-httpx>=0.35",
     "pre-commit>=4.0",
     "types-redis>=4.6",
-    "aiosqlite>=0.20",
 ]
 
 [build-system]
@@ -122,7 +121,7 @@ show_error_codes = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["celery.*", "livekit.*", "faster_whisper.*", "piper.*"]
+module = ["celery.*", "livekit.*", "faster_whisper.*", "piper.*", "alembic.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
@@ -133,6 +132,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--cov=openvoice --cov-report=term-missing --cov-report=xml"
+markers = [
+    "integration: requires a real PostgreSQL database (see tests/integration/conftest.py)",
+]
 
 [tool.coverage.run]
 source = ["src/openvoice"]
