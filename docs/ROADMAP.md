@@ -1,9 +1,12 @@
 # Roadmap
 
-## Phase 1 — MVP (in progress)
+## Phase 1 — MVP (complete)
 
-Built in this order; each step must pass lint + mypy strict + tests before
-the next begins.
+Built in this order; each step passed lint + mypy strict + tests before
+the next began. Two known gaps carried forward, tracked below and in
+their respective ADR/step notes rather than hidden: LiveKit hasn't been
+smoke-tested against a live server, and booking isn't yet reachable via
+multi-turn voice conversation (only the REST API today).
 
 1. [x] Project foundations: repo structure, `pyproject.toml`, `.gitignore`,
        README, MIT license, pre-commit.
@@ -33,8 +36,26 @@ the next begins.
 10. [x] End-to-end integration tests: a full simulated call (intake -> STT ->
         LLM -> TTS -> booking -> transcript persistence -> post-call
         summary) against a real Postgres, every external service faked.
-11. [ ] Docs finalized: README quickstart, CONTRIBUTING, ARCHITECTURE, this
+11. [x] Docs finalized: README quickstart, CONTRIBUTING, ARCHITECTURE, this
         roadmap.
+
+### Known gaps to close before a production launch
+
+- **LiveKit integration is unverified end-to-end.** It was built and unit
+  tested against the real SDK's types (see ADR 0003), but no LiveKit
+  server or SIP trunk was available in the development environment to
+  place a real call through it. Do this first.
+- **Voice-driven booking isn't wired up.** `BookingService` is complete,
+  tested, and reachable via the REST API, but a caller can't yet book an
+  appointment purely by talking to the agent — that needs LLM
+  tool-calling/function-calling added to `ConversationManager` so it can
+  call `BookingService` mid-conversation (propose slots, confirm a time,
+  handle "actually, how about Tuesday instead").
+- **Docker Compose is unverified in this environment** (the dev machine's
+  virtualization was disabled at the OS/BIOS level) but its config was
+  validated with `docker compose config`. CI runs real Postgres/Redis
+  service containers, so the app code itself is proven against them —
+  only the Compose file's exact YAML wasn't run end-to-end locally.
 
 ## Phase 2 — Post-MVP
 

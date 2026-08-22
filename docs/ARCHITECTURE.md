@@ -32,24 +32,33 @@ change. This is what `docs/adr/0001-record-architecture-decisions.md`
 establishes as the standing convention; provider-specific ADRs reference it
 instead of re-justifying the pattern.
 
-## Call lifecycle (target, built out across Steps 6-7)
+## Call lifecycle
 
 ```
-Incoming call (LiveKit)
-  -> VAD (Silero) detects speech / silence, handles barge-in
-  -> STT provider transcribes the utterance
-  -> Agent core: intent detection, conversation context, LLM provider call
-  -> Action (if needed): calendar lookup/booking, CRM read/write
-  -> TTS provider synthesizes the response
-  -> Streamed back over LiveKit
-  -> CallTranscript persisted; call_id threads through every log line
+Incoming call (LiveKit SIP)
+  -> Caller resolved by phone number (CRM: get_or_create_client)
+  -> AgentSession's Silero VAD segments continuous audio into utterances
+  -> stt_node batch-transcribes each utterance via the configured STT provider
+  -> ConversationManager: intent detection, history, LLM provider call
+  -> llm_node routes the reply back into the session
+  -> tts_node synthesizes the response via the configured TTS provider
+  -> Streamed back over LiveKit; AgentSession owns barge-in/interruption handling
+  -> On hangup: CallTranscript rows persisted, summarize_call dispatched via
+     Celery (never inline — must not delay call teardown)
 ```
+
+Booking (find slots / book / cancel / reschedule) is a separate service
+(`BookingService`) invoked either from the REST API directly, or -- in a
+planned refinement, not yet built -- from the conversation via LLM
+tool-calling (see ROADMAP.md).
 
 Every external call in this path (STT, LLM, TTS, calendar, DB, Redis) is
 wrapped with an explicit timeout and a `tenacity` exponential-backoff retry.
 When a provider is down past its retry budget, the agent's defined fallback
 (e.g. "transfer to a human", "apologize and offer a callback") fires —
-never a silent hang or an unhandled exception on a live call.
+never a silent hang or an unhandled exception on a live call. See
+[docs/adr/0003-livekit-node-override-integration.md](adr/0003-livekit-node-override-integration.md)
+for exactly how OpenVoice's providers are bridged into LiveKit's pipeline.
 
 ## Data layer
 
@@ -58,9 +67,22 @@ never a silent hang or an unhandled exception on a live call.
 - **pgvector** (extension on the same Postgres instance) backs the Phase 2
   RAG knowledge base — deliberately not a separate vector DB, to keep the
   MVP's operational surface small.
-- **Redis** holds ephemeral session/turn-taking state and backs Celery.
-- **Celery** runs anything that shouldn't block the call: post-call
-  summaries, SMS/email confirmations, reminders.
+- **Redis** backs Celery.
+- **Celery** runs the one thing that must never block call teardown:
+  post-call summaries (LLM-generated, from the persisted transcript).
+  SMS/email booking confirmations run synchronously inside
+  `BookingService` instead — a failed notification is logged, not
+  retried via a queue, and never undoes a successful booking.
+
+## API layer
+
+`openvoice/api/` is a thin FastAPI layer over the same services the call
+pipeline uses (`CRMService`, `BookingService`) — it doesn't duplicate
+business logic. Every route depends on an abstraction via FastAPI's
+dependency injection (`openvoice/api/dependencies.py`), never a concrete
+provider class. `CalendarError`/`NotificationError`/`BookingError` are
+mapped to clean HTTP responses (503/502/409) by app-level exception
+handlers in `main.py`, rather than leaking as 500s.
 
 ## Observability
 
@@ -78,3 +100,7 @@ volume metrics are exported for Prometheus/Grafana.
   2.0, CPU-friendly, and good enough by default, while staying swappable.
 - pgvector over a dedicated vector DB: one fewer moving part for the MVP;
   revisit if RAG scale outgrows it (tracked in ROADMAP.md).
+- Twilio/Resend via direct REST calls (`httpx` + `tenacity`), not their
+  vendor SDKs: the wire protocol is simple enough that a hand-rolled
+  client is less code than a dependency, keeps the same retry/timeout
+  pattern as every other provider, and needs no extra install to test.

@@ -9,7 +9,20 @@ never by touching business logic. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 ## Status
 
-Early foundations (Phase 1 MVP in progress). See [docs/ROADMAP.md](docs/ROADMAP.md).
+Phase 1 MVP complete: foundations, DB models, pluggable LLM/STT/TTS, the
+LiveKit call pipeline, booking + notifications, CRM, the REST API, and an
+end-to-end integration test all exist and pass CI. Two things to know before
+relying on this in production:
+
+- The LiveKit call pipeline was built and unit-tested against the real SDK,
+  but not yet smoke-tested against a live LiveKit server + SIP trunk — see
+  [docs/adr/0003-livekit-node-override-integration.md](docs/adr/0003-livekit-node-override-integration.md).
+- Appointment booking is fully implemented and API-exposed, but not yet
+  wired into multi-turn voice conversation (LLM tool-calling for "what day
+  works for you?") — see [docs/ROADMAP.md](docs/ROADMAP.md).
+
+Phase 2 (RAG, admin dashboard, multi-tenant, etc.) is documented but not
+built — see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Stack
 
@@ -17,11 +30,13 @@ Early foundations (Phase 1 MVP in progress). See [docs/ROADMAP.md](docs/ROADMAP.
 - **API**: FastAPI (async), Pydantic v2
 - **Telephony**: [LiveKit Agents](https://docs.livekit.io/agents/)
 - **STT**: faster-whisper (pluggable)
-- **TTS**: Piper (pluggable — Coqui/ElevenLabs also supported)
+- **TTS**: Piper (pluggable — ElevenLabs also supported; see ADR 0001 on Coqui)
 - **VAD**: Silero
 - **LLM**: Anthropic / OpenAI / self-hosted (OpenAI-compatible), pluggable via a Provider Factory
+- **Calendar**: Google Calendar (pluggable)
+- **Notifications**: Twilio (SMS) / Resend (email), both via direct REST calls
 - **Data**: PostgreSQL + pgvector, SQLAlchemy 2.0 (async), Alembic, Redis, Celery
-- **Quality**: ruff, mypy (strict), pytest (>85% coverage target), pre-commit, GitHub Actions CI
+- **Quality**: ruff, mypy (strict), pytest (>85% coverage), pre-commit, GitHub Actions CI
 
 ## Quickstart
 
@@ -35,6 +50,14 @@ uv run uvicorn openvoice.main:app --reload
 ```
 
 Then open http://localhost:8000/health and http://localhost:8000/docs.
+
+### REST API
+
+`/clients`, `/clients/{id}/calls`, `/calls/{id}` (with transcript),
+`/appointments` (`available-slots`, book, cancel, reschedule) — see
+http://localhost:8000/docs for the full interactive OpenAPI spec.
+`/health` reports real DB/Redis status (required) and LiveKit reachability
+(informational).
 
 ### Running the voice agent (real calls)
 
@@ -67,29 +90,41 @@ uv run celery -A openvoice.tasks.celery_app worker --loglevel=info
 ## Development
 
 ```bash
-uv sync --group dev            # install core + dev dependencies
+uv sync --group dev              # install core + dev dependencies
 uv sync --extra all --group dev  # + voice/calendar/notifications extras
-uv run pre-commit install      # install git hooks
+uv run pre-commit install        # install git hooks
 
-uv run ruff check .            # lint
-uv run ruff format .           # format
-uv run mypy src                # strict type check
-uv run pytest                  # tests + coverage report
+uv run ruff check .              # lint
+uv run ruff format .             # format
+uv run mypy src                  # strict type check
+uv run pytest -m "not integration"   # unit tests (no DB needed)
+uv run pytest                        # + integration tests (needs Postgres: docker compose up -d postgres)
 ```
 
 ## Project layout
 
 ```
-src/openvoice/        Application source (installable package)
+src/openvoice/
   config.py            Pydantic Settings — all runtime configuration
   logging.py           Structured (structlog) logging setup
-  main.py              FastAPI app factory + /health
+  main.py              FastAPI app factory, routers, exception handlers
+  api/                 REST API: routers, request/response schemas, DI
+  agent/               Conversation core: intent detection, history, fallback
+  llm/, stt/, tts/      Pluggable provider interfaces + implementations + factories
+  calendar/             Pluggable calendar provider (Google Calendar)
+  notifications/        Pluggable SMS/email providers (Twilio, Resend)
+  booking/              BookingService: slots, book/cancel/reschedule
+  crm/                  Caller recognition, call history
+  telephony/             LiveKit call pipeline + worker entrypoint
+  tasks/                 Celery app + post-call summary task
+  db/                   SQLAlchemy models + session management
+migrations/             Alembic migrations
 tests/
-  unit/                Fast, isolated unit tests
-  integration/          End-to-end flows (added in later steps)
+  unit/                Fast, isolated unit tests (mocked externals)
+  integration/          Real-Postgres tests, incl. the end-to-end call test
 docs/
   ARCHITECTURE.md       System design + pluggable-provider pattern
-  ROADMAP.md            Phase 2 (post-MVP) plans
+  ROADMAP.md            Phase 1 status + Phase 2 (post-MVP) plans
   adr/                  Architecture Decision Records
 ```
 
