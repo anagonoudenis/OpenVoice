@@ -149,10 +149,17 @@ docs/
   adr/               Architecture Decision Records
 ```
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
+workflow and a list of good first issues. This project follows the
+[Contributor Covenant](CODE_OF_CONDUCT.md). Found a security issue? See
+[SECURITY.md](SECURITY.md) instead of opening a public issue.

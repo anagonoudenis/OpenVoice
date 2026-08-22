@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & design discussions
+    url: https://github.com/anagonoudenis/OpenVoice-/discussions
+    about: Ask usage questions or discuss a design before opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/anagonoudenis/OpenVoice-/security/advisories/new
+    about: Please report vulnerabilities privately — see SECURITY.md. Do not open a public issue.

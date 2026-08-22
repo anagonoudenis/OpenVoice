@@ -56,6 +56,11 @@ multi-turn voice conversation (only the REST API today).
   validated with `docker compose config`. CI runs real Postgres/Redis
   service containers, so the app code itself is proven against them —
   only the Compose file's exact YAML wasn't run end-to-end locally.
+- **Sentry and Prometheus aren't actually wired up.** `Settings.sentry_dsn`
+  exists and `prometheus-client` is a dependency (per the original spec's
+  observability requirements), but nothing calls `sentry_sdk.init()` and
+  there's no `/metrics` endpoint yet — structured logging is the only
+  observability channel that's actually live today. Good first issue.
 
 ## Phase 2 — Post-MVP
 

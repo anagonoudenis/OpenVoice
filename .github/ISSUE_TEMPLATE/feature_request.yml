@@ -1,0 +1,51 @@
+name: Feature request
+description: Propose a new capability or a new pluggable provider
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [docs/ROADMAP.md](../../blob/main/docs/ROADMAP.md) first —
+        your idea may already be tracked for Phase 2, or listed as a known
+        gap to close.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - New provider (LLM / STT / TTS / calendar / SMS / email)
+        - Call pipeline / telephony
+        - Booking / CRM
+        - REST API
+        - Developer experience (CI, tests, tooling)
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What can't you do today that this would enable?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        If this is a new provider, note that OpenVoice follows a strict
+        pluggable-provider pattern (base.py interface + factory + tests
+        with the external API mocked) — see CONTRIBUTING.md.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
