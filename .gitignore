@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+uv.lock.bak
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+
+# Alembic (keep versions, ignore local db files)
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Secrets / keys
+*.pem
+*.key
+credentials.json
+token.json
