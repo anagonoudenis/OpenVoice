@@ -88,6 +88,28 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
   own code. Fixed by giving `OpenVoiceAgent` a `_NullLLM` stub — present
   so the gate passes, never actually called since `llm_node` bypasses it
   entirely.
+- **The agent's voice sounded slow, deep, and robotic.** Piper voice
+  models synthesize at their own native rate (22050 Hz for the bundled
+  `en_US-amy-medium`), not whatever rate the caller asks for --
+  `PiperTTSProvider.synthesize` accepted a `sample_rate` argument but
+  silently ignored it, and the LiveKit bridge then labeled that 22050 Hz
+  audio as 16000 Hz `AudioFrame`s. That plays back ~27% slower and pitched
+  down: exactly what a real call sounded like. Fixed by resampling to the
+  requested rate (linear interpolation, no new dependency needed --
+  `numpy` was already required); regression test covers a 22050→16000
+  conversion. Caught by actually listening to the agent speak, not by any
+  prior test (every existing test used a fake voice at a matching rate).
+- **The agent always replied in English, regardless of what language the
+  caller spoke, and pronounced non-English replies badly.** Two separate
+  gaps: the system prompt never told the LLM to match the caller's
+  language, and the default local Piper voice (`en_US-amy-medium`) is
+  English-only, so it would mispronounce any other language's text even
+  if the LLM did reply in it. Fixed the prompt gap by adding an explicit
+  "always reply in the caller's language" instruction. The voice-model
+  gap isn't fixable in general (a single local Piper voice is one
+  language) -- for local dev, added a French voice
+  (`fr_FR-siwis-medium`) alongside the English one; which one loads is
+  controlled by `PIPER_VOICE_MODEL_PATH`, per deployment.
 - **Integration tests could silently wipe the real dev database.**
   `tests/integration/conftest.py`'s default `TEST_DATABASE_URL` and a
   developer's real `DATABASE_URL` could end up pointing at the same

@@ -12,12 +12,26 @@ installed `piper-tts==1.7.0` API, not guessed.
 
 Piper's synthesis call is blocking/CPU-bound; it always runs via
 `asyncio.to_thread` so it never blocks the event loop serving a live call.
+
+Piper voice models don't synthesize at an arbitrary caller-chosen rate --
+they always produce audio at their own native `config.sample_rate` (most
+voices, including the bundled default `en_US-amy-medium`, are 22050 Hz).
+`BaseTTSProvider.synthesize`'s contract is to yield PCM16 *at the
+requested* `sample_rate` (see `ElevenLabsTTSProvider`, which asks its API
+for that rate directly); silently ignoring the mismatch and yielding
+22050 Hz audio labeled as 16000 Hz plays back ~27% too slow and pitched
+down, which is exactly what a real voice call sounded like before this
+was caught by actually listening to it (see CHANGELOG). Fixed by
+resampling to the requested rate with simple linear interpolation --
+good enough for speech at these rates, and avoids pulling in a dedicated
+resampling dependency for one call site.
 """
 
 import asyncio
 from collections.abc import AsyncIterator, Iterable
 from typing import Protocol
 
+import numpy as np
 import structlog
 
 from openvoice.config import Settings
@@ -31,10 +45,33 @@ class _PiperAudioChunk(Protocol):
     def audio_int16_bytes(self) -> bytes: ...
 
 
+class _PiperVoiceConfig(Protocol):
+    @property
+    def sample_rate(self) -> int: ...
+
+
 class _PiperVoice(Protocol):
     """Structural type for `piper.PiperVoice`, avoiding a hard import."""
 
+    @property
+    def config(self) -> _PiperVoiceConfig: ...
+
     def synthesize(self, text: str) -> Iterable[_PiperAudioChunk]: ...
+
+
+def _resample_pcm16(pcm: bytes, *, from_rate: int, to_rate: int) -> bytes:
+    """Linearly resample mono PCM16 `pcm` from `from_rate` to `to_rate`."""
+    if from_rate == to_rate or not pcm:
+        return pcm
+
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    target_count = max(1, round(samples.size * to_rate / from_rate))
+    resampled = np.interp(
+        np.linspace(0, samples.size - 1, target_count),
+        np.arange(samples.size),
+        samples,
+    )
+    return resampled.astype(np.int16).tobytes()
 
 
 class PiperTTSProvider(BaseTTSProvider):
@@ -63,5 +100,8 @@ class PiperTTSProvider(BaseTTSProvider):
             logger.error("piper_synthesize_failed", error=str(exc))
             raise TTSError(f"Piper synthesis failed: {exc}") from exc
 
+        native_rate = self._voice.config.sample_rate
         for chunk in chunks:
-            yield chunk.audio_int16_bytes
+            yield _resample_pcm16(
+                chunk.audio_int16_bytes, from_rate=native_rate, to_rate=sample_rate
+            )
