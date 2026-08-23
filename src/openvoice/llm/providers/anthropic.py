@@ -57,10 +57,18 @@ class AnthropicLLMProvider(BaseLLMProvider):
         if system_prompt is not None:
             kwargs["system"] = system_prompt
 
+        async def _call() -> anthropic.types.Message:
+            return await self._client.messages.create(**kwargs)  # type: ignore[no-any-return]
+
         try:
-            response: anthropic.types.Message = await self._retryer(
-                self._client.messages.create, **kwargs
-            )
+            # `self._client.messages.create` is not passed to the retryer
+            # directly: the Anthropic SDK wraps its methods in a way that
+            # `inspect.iscoroutinefunction` (which tenacity's AsyncRetrying
+            # uses to decide whether to await the call) fails to recognize
+            # as async, silently returning an unawaited coroutine instead
+            # of the response. Wrapping it in our own plain `async def`
+            # closure sidesteps that misdetection.
+            response: anthropic.types.Message = await self._retryer(_call)
         except anthropic.APIError as exc:
             logger.error("anthropic_call_failed", error=str(exc), model=self._model)
             raise LLMProviderError(f"Anthropic API call failed: {exc}") from exc

@@ -18,10 +18,23 @@ from openvoice.config import Settings, get_settings
 
 @pytest.fixture
 def required_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Set the minimal env vars needed for ``Settings`` to validate."""
+    """Set the minimal env vars needed for ``Settings`` to validate.
+
+    Also pins every provider-selection field to its documented default.
+    A developer's real local ``.env`` may legitimately set these to
+    something else for manual testing (real env vars take priority over
+    ``.env`` file values) -- without pinning them here too, that would
+    leak into tests asserting default-provider behavior.
+    """
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-please-ignore")
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("STT_PROVIDER", "faster_whisper")
+    monkeypatch.setenv("TTS_PROVIDER", "piper")
+    monkeypatch.setenv("CALENDAR_PROVIDER", "google")
+    monkeypatch.setenv("SMS_PROVIDER", "twilio")
+    monkeypatch.setenv("EMAIL_PROVIDER", "resend")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

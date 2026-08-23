@@ -14,6 +14,10 @@ def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-please-ignore")
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    # Deterministic baseline, applied before overrides: a real local `.env`
+    # may legitimately set these to something else for manual testing.
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("TTS_PROVIDER", "piper")
     for key, value in overrides.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()

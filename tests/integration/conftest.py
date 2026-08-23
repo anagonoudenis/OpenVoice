@@ -21,12 +21,27 @@ from openvoice.db.models import Base
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://openvoice:openvoice@localhost:5432/openvoice",
+    "postgresql+asyncpg://openvoice:openvoice@localhost:5432/openvoice_test",
 )
+# Deliberately a *different* database name than the app's real dev DB
+# (`openvoice`), not just a different env var: `db_engine` below runs
+# `Base.metadata.drop_all` after every test. Pointing this at the same
+# database as real local development -- e.g. by exporting
+# `TEST_DATABASE_URL` to "convenient" defaults -- silently wipes real
+# dev/demo data (this happened once while testing this project for real;
+# see CHANGELOG). Create it once with, e.g.:
+#   psql -U postgres -c "CREATE DATABASE openvoice_test OWNER openvoice;"
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def db_engine() -> AsyncIterator[AsyncEngine]:
+    """Function-scoped, not session-scoped: a session-scoped async engine
+    would need its own `loop_scope="session"` (pytest-asyncio) to share an
+    event loop with function-scoped test coroutines, and asyncpg
+    connections can't cross event loops -- rather than take on that
+    cross-loop complexity, each test gets a fresh engine. Slightly more
+    setup/teardown per test, but correct and simple.
+    """
     engine = create_async_engine(TEST_DATABASE_URL)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

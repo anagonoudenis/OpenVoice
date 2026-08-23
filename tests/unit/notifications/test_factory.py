@@ -12,6 +12,16 @@ def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-please-ignore")
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    # Deterministic baseline, applied before overrides: a real local `.env`
+    # may legitimately set these to something else for manual testing.
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("SMS_PROVIDER", "twilio")
+    monkeypatch.setenv("EMAIL_PROVIDER", "resend")
+    monkeypatch.delenv("TWILIO_ACCOUNT_SID", raising=False)
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("TWILIO_FROM_NUMBER", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("RESEND_FROM_EMAIL", raising=False)
     for key, value in overrides.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()

@@ -53,6 +53,34 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
   "credential missing" one). Fixed at the root with
   `env_ignore_empty=True` on `Settings.model_config`, plus a regression
   test, rather than patching each affected call site individually.
+- **Tenacity silently never awaited real Anthropic/OpenAI SDK calls.**
+  `AsyncRetrying` decides whether to `await` a call based on
+  `inspect.iscoroutinefunction(fn)`; both SDKs' `create` methods are
+  plain (non-`async def`) functions that return a coroutine when called,
+  so that check is `False` and the raw, unawaited coroutine was returned
+  as the "response" instead of the real result. Every mocked unit test
+  passed anyway, because `AsyncMock` *is* correctly detected as async —
+  this only broke against a real API call (caught by actually calling
+  DeepSeek for real). Fixed by wrapping each SDK call in a plain local
+  `async def` closure, which tenacity detects correctly; added a
+  regression test that reproduces the exact "sync wrapper returning a
+  coroutine" shape rather than relying on `AsyncMock`.
+- **`_caller_phone_number` could pass a `Mock` object into a SQL query.**
+  In LiveKit's `console` mode (used for interactive local testing), the
+  simulated participant's `attributes` isn't a real `dict`, so `.get(...)`
+  returns a `Mock` instead of `None` when the key is absent. A plain
+  truthiness check (`if phone_number:`) let that `Mock` through as if it
+  were a real phone number, which then hit the database as a query
+  parameter and crashed. Fixed with an explicit `isinstance(..., str)`
+  check; caught by running the worker for real, not by any mocked test.
+- **Integration tests could silently wipe the real dev database.**
+  `tests/integration/conftest.py`'s default `TEST_DATABASE_URL` and a
+  developer's real `DATABASE_URL` could end up pointing at the same
+  Postgres database (e.g. both on the default port), and the test
+  fixture runs `Base.metadata.drop_all` after every test. Changed the
+  default test database name to `openvoice_test` (distinct from the app's
+  `openvoice`), documented the risk inline, and re-ran migrations against
+  the real dev database after this was caught happening once.
 
 ### Changed
 

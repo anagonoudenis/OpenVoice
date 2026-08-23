@@ -86,10 +86,18 @@ def _caller_phone_number(ctx: JobContext) -> str | None:
     `sip.phoneNumber` is the participant attribute LiveKit's SIP
     integration sets on inbound calls (see LiveKit's SIP participant
     attributes reference).
+
+    The `isinstance` check matters in practice, not just in theory: in
+    `console`/test-harness modes, LiveKit simulates a participant whose
+    `attributes` isn't a real dict, so `.get(...)` returns a Mock object
+    instead of `None` -- a plain truthiness check let that Mock through as
+    if it were a real phone number, which then hit the database as a
+    bogus query parameter (`UndefinedTableError`-adjacent crash, caught by
+    running this in `console` mode for real).
     """
     for participant in ctx.room.remote_participants.values():
         phone_number = participant.attributes.get("sip.phoneNumber")
-        if phone_number:
+        if isinstance(phone_number, str) and phone_number:
             return phone_number
     return None
 

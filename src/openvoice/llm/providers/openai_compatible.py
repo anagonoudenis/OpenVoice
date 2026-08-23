@@ -73,10 +73,18 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
             "max_tokens": max_tokens,
         }
 
+        async def _call() -> openai.types.chat.ChatCompletion:
+            return await self._client.chat.completions.create(**kwargs)  # type: ignore[no-any-return]
+
         try:
-            response: openai.types.chat.ChatCompletion = await self._retryer(
-                self._client.chat.completions.create, **kwargs
-            )
+            # `self._client.chat.completions.create` is not passed to the
+            # retryer directly: the OpenAI SDK wraps its methods in a way
+            # that `inspect.iscoroutinefunction` (which tenacity's
+            # AsyncRetrying uses to decide whether to await the call) fails
+            # to recognize as async, silently returning an unawaited
+            # coroutine instead of the response. Wrapping it in our own
+            # plain `async def` closure sidesteps that misdetection.
+            response: openai.types.chat.ChatCompletion = await self._retryer(_call)
         except openai.APIError as exc:
             logger.error("openai_call_failed", error=str(exc), model=self._model)
             raise LLMProviderError(f"OpenAI-compatible API call failed: {exc}") from exc

@@ -43,6 +43,10 @@ Thumbs.db
 # Docker
 *.pid
 
+# Local dev tools (downloaded binaries, not committed)
+/tools/
+/models/
+
 # Alembic (keep versions, ignore local db files)
 *.db
 *.sqlite3

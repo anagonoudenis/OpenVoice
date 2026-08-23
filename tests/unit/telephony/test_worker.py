@@ -7,7 +7,7 @@ enough (given a mocked `LiveKitAPI`/a fake room) to unit test properly.
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 import structlog
@@ -121,4 +121,20 @@ def test_caller_phone_number_returns_none_when_absent() -> None:
 
 def test_caller_phone_number_returns_none_for_no_participants() -> None:
     ctx = _ctx_with_participants()
+    assert worker._caller_phone_number(ctx) is None  # type: ignore[arg-type]
+
+
+def test_caller_phone_number_ignores_non_string_attribute_value() -> None:
+    """Regression test: in LiveKit's `console`/test-harness modes, the
+    simulated participant's `attributes` isn't a real dict, so `.get(...)`
+    can return a Mock object instead of `None`. A plain truthiness check
+    let that Mock through as if it were a real phone number, which then
+    reached the database as a bogus query parameter -- caught by running
+    the worker for real in `console` mode, not by any mocked test.
+    """
+    mock_attributes = Mock()
+    mock_attributes.get.return_value = Mock()  # truthy, but not a str
+    ctx = SimpleNamespace(
+        room=SimpleNamespace(remote_participants={"0": SimpleNamespace(attributes=mock_attributes)})
+    )
     assert worker._caller_phone_number(ctx) is None  # type: ignore[arg-type]

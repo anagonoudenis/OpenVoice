@@ -11,6 +11,12 @@ from openvoice.llm.providers.openai_compatible import OpenAICompatibleLLMProvide
 def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
     monkeypatch.setenv("SECRET_KEY", "test-secret-key-please-ignore")
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+    # Deterministic baseline, applied before overrides: a real local `.env`
+    # may legitimately set LLM_PROVIDER to something else for manual
+    # testing, which would otherwise leak into "default" test cases here
+    # (real env vars take priority over `.env` file values, but nothing
+    # here overrides them unless we do it explicitly).
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     for key, value in overrides.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()

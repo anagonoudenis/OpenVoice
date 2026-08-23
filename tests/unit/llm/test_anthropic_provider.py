@@ -88,6 +88,33 @@ async def test_generate_raises_provider_error_after_exhausting_retries(
     assert mock_create.call_count == 3
 
 
+async def test_generate_awaits_a_sync_wrapper_that_returns_a_coroutine(
+    provider: AnthropicLLMProvider,
+) -> None:
+    """Regression test for a real bug: the Anthropic/OpenAI SDKs' `create`
+    methods are plain (non-`async def`) functions that return a coroutine
+    when called -- the correct calling convention is still `await
+    client...create(...)`, but `inspect.iscoroutinefunction(create)` is
+    False, which used to make tenacity's `AsyncRetrying` skip awaiting it
+    and return the coroutine object itself instead of the response. Caught
+    by an actual DeepSeek API call in production testing, not by any
+    AsyncMock-based test above (AsyncMock is *always* correctly detected
+    as async, which is exactly why it masked this bug).
+    """
+
+    def _sync_wrapper_returning_coroutine(**kwargs: object) -> object:
+        async def _inner() -> SimpleNamespace:
+            return _fake_response("really awaited")
+
+        return _inner()
+
+    provider._client.messages.create = _sync_wrapper_returning_coroutine  # type: ignore[method-assign]
+
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
+
+    assert result.content == "really awaited"
+
+
 async def test_generate_does_not_retry_non_retryable_error(provider: AnthropicLLMProvider) -> None:
     response = httpx.Response(401, request=_request())
     mock_create = AsyncMock(
