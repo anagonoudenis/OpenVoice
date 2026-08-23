@@ -42,7 +42,12 @@ class Call(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     client_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), index=True
     )
-    livekit_room_name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # Deliberately NOT unique: `Call.id` is the real identifier for a call.
+    # A LiveKit room name being reused is legitimate -- e.g. every
+    # `console`-mode test session uses the fixed room name "console" -- so
+    # treating it as a uniqueness key would reject the second-ever local
+    # test call with an IntegrityError (this happened; see CHANGELOG).
+    livekit_room_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     direction: Mapped[CallDirection] = mapped_column(
         Enum(CallDirection, native_enum=False, length=16), nullable=False
     )

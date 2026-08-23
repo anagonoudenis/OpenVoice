@@ -21,6 +21,29 @@ from openvoice.db.models import (
 pytestmark = pytest.mark.integration
 
 
+async def test_calls_may_share_a_livekit_room_name(db_session: AsyncSession) -> None:
+    """Regression test: `console`-mode local test sessions all reuse the
+    fixed room name "console", so this must not be a unique constraint --
+    `Call.id` is the real identifier. This used to raise IntegrityError on
+    the second call (caught by running the project for real).
+    """
+    first = Call(
+        livekit_room_name="console",
+        direction=CallDirection.INBOUND,
+        status=CallStatus.COMPLETED,
+    )
+    second = Call(
+        livekit_room_name="console",
+        direction=CallDirection.INBOUND,
+        status=CallStatus.IN_PROGRESS,
+    )
+    db_session.add_all([first, second])
+    await db_session.commit()
+
+    assert first.id != second.id
+    assert first.livekit_room_name == second.livekit_room_name == "console"
+
+
 async def test_create_client(db_session: AsyncSession) -> None:
     client = Client(phone_number="+15551230001", full_name="Ada Lovelace")
     db_session.add(client)
