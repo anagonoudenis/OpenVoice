@@ -21,6 +21,18 @@ STT/LLM/TTS legs of the pipeline. `BaseSTTProvider.transcribe_stream`
 expects one VAD-delimited utterance per call, so `stt_node` runs its own
 `VADStream` to segment the continuous call audio into utterances before
 handing each one to the configured STT provider.
+
+`_NullLLM` below works around a real bug found by actually talking to the
+agent (see CHANGELOG): overriding `llm_node` is meant to fully replace
+how a reply is generated, but `AgentActivity._user_turn_completed_task`
+(livekit-agents' own turn-taking code, not ours) still gates the whole
+generation step on `self.llm is not None` *before* it ever calls
+`llm_node` -- with no LLM plugin configured, that check silently
+`return`s with no exception logged. The caller's speech was transcribed
+correctly (proof VAD+STT worked), but no reply was ever generated because
+of this gate, not because of anything in our `llm_node`. Passing a
+present-but-inert `LLM` instance satisfies the gate; its `chat()` is
+never actually invoked because `llm_node` is fully overridden.
 """
 
 import asyncio
@@ -29,7 +41,7 @@ from typing import Any
 
 import structlog
 from livekit import rtc
-from livekit.agents import Agent, ModelSettings, llm, stt, vad
+from livekit.agents import Agent, APIConnectOptions, ModelSettings, llm, stt, vad
 from livekit.agents.language import LanguageCode
 
 from openvoice.agent.conversation import ConversationManager
@@ -40,6 +52,28 @@ logger = structlog.get_logger(__name__)
 
 _SAMPLE_RATE = 16000
 _NUM_CHANNELS = 1
+_DEFAULT_CONN_OPTIONS = APIConnectOptions()
+
+
+class _NullLLM(llm.LLM[Any]):
+    """Satisfies `AgentActivity`'s `self.llm is not None` gate without ever
+    being called: `OpenVoiceAgent.llm_node` fully replaces reply
+    generation, so `chat()` here is unreachable in practice.
+    """
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = _DEFAULT_CONN_OPTIONS,
+        parallel_tool_calls: Any = None,
+        tool_choice: Any = None,
+        extra_kwargs: Any = None,
+    ) -> llm.LLMStream:
+        raise NotImplementedError(
+            "_NullLLM.chat should be unreachable: OpenVoiceAgent overrides llm_node"
+        )
 
 
 class OpenVoiceAgent(Agent):
@@ -55,7 +89,7 @@ class OpenVoiceAgent(Agent):
         system_prompt: str,
         on_transfer_to_human: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
-        super().__init__(instructions=system_prompt)
+        super().__init__(instructions=system_prompt, llm=_NullLLM())
         self._conversation = conversation
         self._stt_provider = stt_provider
         self._tts_provider = tts_provider

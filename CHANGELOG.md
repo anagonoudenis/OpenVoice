@@ -73,6 +73,21 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
   were a real phone number, which then hit the database as a query
   parameter and crashed. Fixed with an explicit `isinstance(..., str)`
   check; caught by running the worker for real, not by any mocked test.
+- **The agent transcribed the caller correctly but never replied, with no
+  error logged.** `OpenVoiceAgent` fully overrides `llm_node` to route
+  replies through OpenVoice's own `ConversationManager`, so no
+  `livekit.agents.llm.LLM` plugin was ever configured on `AgentSession` or
+  `Agent`. But `livekit-agents`' own turn-taking code
+  (`AgentActivity._user_turn_completed_task`) gates the entire
+  reply-generation step on `self.llm is not None` *before* it calls
+  `llm_node` at all — with no LLM configured, it just returns, silently,
+  turn after turn. STT worked (the caller's speech showed up as a
+  transcript), which made this look like an `llm_node`/TTS bug; it was
+  actually one line away, in `livekit-agents` itself, and only visible by
+  reading its source (`agent_activity.py`), not by reasoning about our
+  own code. Fixed by giving `OpenVoiceAgent` a `_NullLLM` stub — present
+  so the gate passes, never actually called since `llm_node` bypasses it
+  entirely.
 - **Integration tests could silently wipe the real dev database.**
   `tests/integration/conftest.py`'s default `TEST_DATABASE_URL` and a
   developer's real `DATABASE_URL` could end up pointing at the same
