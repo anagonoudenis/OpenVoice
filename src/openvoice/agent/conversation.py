@@ -3,7 +3,7 @@
 import structlog
 
 from openvoice.agent.base import AgentReply, Intent
-from openvoice.agent.intent import detect_intent
+from openvoice.agent.structured_reply import build_structured_system_prompt, parse_structured_reply
 from openvoice.llm.base import BaseLLMProvider, LLMMessage, LLMMessageRole, LLMProviderError
 
 logger = structlog.get_logger(__name__)
@@ -12,7 +12,11 @@ _FALLBACK_MESSAGE = (
     "I'm sorry, I'm having trouble processing that right now. "
     "Let me transfer you to a member of our team."
 )
-_HUMAN_TRANSFER_MESSAGE = "Of course, let me transfer you to a member of our team."
+
+# Both mean "a human should pick this up": urgent issues still get a
+# reassuring LLM-generated reply first, but are always escalated rather
+# than resolved by the bot.
+_TRANSFER_INTENTS = frozenset({Intent.HUMAN_TRANSFER, Intent.URGENT})
 
 
 class ConversationManager:
@@ -22,6 +26,11 @@ class ConversationManager:
     `LLMProviderError`: on an unrecoverable LLM failure it returns the
     defined human-transfer fallback reply instead, so a live call never
     hangs on an unhandled exception.
+
+    Intent classification and reply generation happen in a single LLM
+    call (see `openvoice.agent.structured_reply`) rather than two
+    sequential ones -- this roughly halves per-turn latency on a live
+    call, the dominant driver of how natural the agent feels to talk to.
     """
 
     def __init__(
@@ -33,7 +42,7 @@ class ConversationManager:
         max_history_turns: int = 20,
     ) -> None:
         self._llm = llm
-        self._system_prompt = system_prompt
+        self._system_prompt = build_structured_system_prompt(system_prompt)
         self._call_id = call_id
         self._max_history_turns = max_history_turns
         self._history: list[LLMMessage] = []
@@ -48,35 +57,24 @@ class ConversationManager:
         log = logger.bind(call_id=self._call_id)
         log.info("utterance_received", text=caller_text)
 
-        intent = await detect_intent(self._llm, caller_text)
-        log.info("intent_detected", intent=intent.value)
-
-        if intent is Intent.HUMAN_TRANSFER:
-            self._append_turn(caller_text, _HUMAN_TRANSFER_MESSAGE)
-            return AgentReply(text=_HUMAN_TRANSFER_MESSAGE, intent=intent, transfer_to_human=True)
-
         self._history.append(LLMMessage(role=LLMMessageRole.USER, content=caller_text))
         try:
             response = await self._llm.generate(self._history, system_prompt=self._system_prompt)
         except LLMProviderError as exc:
             log.error("llm_generate_failed_falling_back_to_human", error=str(exc))
             self._history.pop()  # don't keep an unanswered user turn in context
-            return AgentReply(text=_FALLBACK_MESSAGE, intent=intent, transfer_to_human=True)
+            return AgentReply(text=_FALLBACK_MESSAGE, intent=Intent.GENERAL, transfer_to_human=True)
 
-        self._history.append(LLMMessage(role=LLMMessageRole.ASSISTANT, content=response.content))
+        intent, reply_text = parse_structured_reply(response.content)
+        log.info("intent_detected", intent=intent.value)
+
+        self._history.append(LLMMessage(role=LLMMessageRole.ASSISTANT, content=reply_text))
         self._trim_history()
-        log.info("reply_generated", text=response.content)
+        log.info("reply_generated", text=reply_text)
 
-        # Urgent issues still get a reassuring LLM-generated reply, but are
-        # always escalated to a human agent rather than resolved by the bot.
         return AgentReply(
-            text=response.content, intent=intent, transfer_to_human=intent is Intent.URGENT
+            text=reply_text, intent=intent, transfer_to_human=intent in _TRANSFER_INTENTS
         )
-
-    def _append_turn(self, caller_text: str, agent_text: str) -> None:
-        self._history.append(LLMMessage(role=LLMMessageRole.USER, content=caller_text))
-        self._history.append(LLMMessage(role=LLMMessageRole.ASSISTANT, content=agent_text))
-        self._trim_history()
 
     def _trim_history(self) -> None:
         max_messages = self._max_history_turns * 2

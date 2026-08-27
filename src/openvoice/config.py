@@ -151,6 +151,13 @@ class Settings(BaseSettings):
     agent_max_history_turns: int = 20
     agent_human_transfer_number: str | None = None
 
+    # --- Voice turn-taking (silero VAD, tuned for phone conversation) --------
+    # The default (0.55s) was tuned for generic use; phone callers expect a
+    # snappier response, and 0.55s of dead air after they stop talking reads
+    # as the agent being slow. Lowered a bit as a safe middle ground -- too
+    # low risks cutting callers off mid-sentence during a natural pause.
+    vad_min_silence_duration_seconds: float = 0.4
+
     # --- Calendar / booking (pluggable) ---------------------------------------
     calendar_provider: CalendarProvider = CalendarProvider.GOOGLE
     google_calendar_id: str = "primary"

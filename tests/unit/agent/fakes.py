@@ -12,6 +12,7 @@ class FakeLLMProvider(BaseLLMProvider):
         self.responses = list(responses or [])
         self.fail = fail
         self.calls: list[list[LLMMessage]] = []
+        self.system_prompts: list[str | None] = []
 
     async def generate(
         self,
@@ -22,6 +23,7 @@ class FakeLLMProvider(BaseLLMProvider):
         max_tokens: int = 1024,
     ) -> LLMResponse:
         self.calls.append(list(messages))
+        self.system_prompts.append(system_prompt)
         if self.fail:
             raise LLMProviderError("fake provider failure")
         content = self.responses.pop(0) if self.responses else "ok"

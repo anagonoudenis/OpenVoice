@@ -19,7 +19,7 @@ from typing import Any
 
 import structlog
 from livekit import agents, api
-from livekit.agents import AgentServer, AgentSession, JobContext
+from livekit.agents import AgentServer, AgentSession, JobContext, TurnHandlingOptions
 from livekit.plugins import silero
 
 from openvoice.agent.conversation import ConversationManager
@@ -119,7 +119,9 @@ async def entrypoint(ctx: JobContext) -> None:
         call_id=str(call_id),
         max_history_turns=settings.agent_max_history_turns,
     )
-    vad_provider = silero.VAD.load()
+    vad_provider = silero.VAD.load(
+        min_silence_duration=settings.vad_min_silence_duration_seconds
+    )
 
     crm = CRMService()
     phone_number = _caller_phone_number(ctx)
@@ -186,7 +188,21 @@ async def entrypoint(ctx: JobContext) -> None:
         system_prompt=build_system_prompt(settings),
         on_transfer_to_human=on_transfer_to_human,
     )
-    session: AgentSession[None] = AgentSession(vad=vad_provider, allow_interruptions=True)
+    session: AgentSession[None] = AgentSession(
+        vad=vad_provider,
+        turn_handling=TurnHandlingOptions(
+            interruption={"enabled": True},
+            # OpenVoiceAgent.llm_node is stateful: ConversationManager.handle_utterance
+            # mutates conversation history as a side effect of being called, once
+            # per confirmed turn. Preemptive generation (on by default) calls
+            # llm_node speculatively, against a transcript that hasn't been
+            # confirmed final yet and may still change -- for a stateful node
+            # that means a second, corrective call after a changed transcript
+            # would append a bogus exchange to history for words the caller
+            # never actually finished saying. Disabled for correctness.
+            preemptive_generation={"enabled": False},
+        ),
+    )
 
     await session.start(agent=agent, room=ctx.room)
 

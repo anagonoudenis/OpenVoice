@@ -134,7 +134,9 @@ async def test_stt_node_ignores_non_end_of_speech_events() -> None:
 
 
 async def test_llm_node_routes_last_user_message_through_conversation() -> None:
-    llm_provider = FakeLLMProvider(responses=["general", "We're open 9 to 5."])
+    llm_provider = FakeLLMProvider(
+        responses=['{"intent": "general", "reply": "We\'re open 9 to 5."}']
+    )
     agent = _agent(
         stt_provider=FakeSTTProvider([]), tts_provider=FakeTTSProvider(), llm_provider=llm_provider
     )

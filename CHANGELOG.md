@@ -40,6 +40,47 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
 - Community infrastructure: issue/PR templates, `CODE_OF_CONDUCT.md`,
   `SECURITY.md`, good-first-issue list in `CONTRIBUTING.md`.
 
+### Changed — latency and turn-taking, for a more natural live conversation
+
+- **Merged intent classification into the reply-generation call.**
+  `ConversationManager.handle_utterance` used to make two sequential LLM
+  round-trips per caller turn (`agent.intent.detect_intent`, then a
+  separate reply generation) -- on a live call that's dead air twice
+  over. Replaced with a single call: the system prompt now asks the
+  model for a small JSON envelope (`{"intent": ..., "reply": ...}`),
+  parsed by the new `openvoice.agent.structured_reply`. Roughly halves
+  per-turn latency. Also fixes a latent bug: the old hardcoded
+  `_HUMAN_TRANSFER_MESSAGE` was always English, contradicting the
+  "always reply in the caller's language" instruction added earlier --
+  the transfer acknowledgment is now LLM-generated like every other
+  reply, so it's in the right language too.
+- **Disabled `livekit-agents`' preemptive generation.** It's enabled by
+  default and calls `llm_node` speculatively, before the caller's turn
+  is confirmed final, against a transcript that may still change.
+  `OpenVoiceAgent.llm_node` is stateful (`ConversationManager` mutates
+  conversation history as a side effect of being called), so a
+  speculative call invalidated by a changed transcript would leave a
+  bogus exchange in history for words the caller never actually
+  finished saying. Disabled via `turn_handling=TurnHandlingOptions(...)`
+  in `openvoice.telephony.worker` for correctness, not performance --
+  found by reading `agent_activity.py`'s `on_preemptive_generation`
+  after realizing the `_NullLLM` fix (above) incidentally made this
+  path reachable for the first time (it's gated on `self.llm is not
+  None`, same gate as the no-reply bug).
+- **Migrated off deprecated `allow_interruptions=True`** to
+  `turn_handling=TurnHandlingOptions(interruption={"enabled": True})`,
+  clearing the deprecation warning livekit-agents prints on every
+  startup and avoiding a break when v2.0 removes the old kwarg.
+- **Tuned VAD silence threshold for phone conversation.**
+  `silero.VAD.load()`'s default `min_silence_duration` (0.55s) reads as
+  the agent being slow to respond on a call. Lowered to 0.4s (new
+  `VAD_MIN_SILENCE_DURATION_SECONDS` setting), a safe middle ground
+  between responsiveness and cutting callers off mid-pause.
+- **Switched the default local voice from Piper to ElevenLabs**
+  (`TTS_PROVIDER=elevenlabs`) once a real API key was available --
+  already fully implemented, just unused; dramatically more natural
+  voice quality than a local Piper model, and multilingual by design.
+
 ### Fixed
 
 - **Blank optional `.env` values were silently breaking config.** Every

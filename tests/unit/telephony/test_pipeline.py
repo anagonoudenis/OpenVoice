@@ -18,10 +18,14 @@ def _pipeline(*, stt: FakeSTTProvider, tts: FakeTTSProvider, llm: FakeLLMProvide
     return CallPipeline(stt=stt, tts=tts, conversation=conversation, call_id="call-1")
 
 
+def _structured(intent: str, reply: str) -> str:
+    return f'{{"intent": "{intent}", "reply": "{reply}"}}'
+
+
 async def test_handle_utterance_audio_runs_full_loop() -> None:
     stt = FakeSTTProvider([TranscriptSegment(text="What are your hours?", is_final=True)])
     tts = FakeTTSProvider()
-    llm = FakeLLMProvider(responses=["general", "We're open 9 to 5."])
+    llm = FakeLLMProvider(responses=[_structured("general", "We're open 9 to 5.")])
     pipeline = _pipeline(stt=stt, tts=tts, llm=llm)
 
     result = await pipeline.handle_utterance_audio(_frames())
@@ -54,7 +58,7 @@ async def test_handle_utterance_audio_ignores_non_final_segments() -> None:
         ]
     )
     tts = FakeTTSProvider()
-    llm = FakeLLMProvider(responses=["general", "9 to 5."])
+    llm = FakeLLMProvider(responses=[_structured("general", "9 to 5.")])
     pipeline = _pipeline(stt=stt, tts=tts, llm=llm)
 
     result = await pipeline.handle_utterance_audio(_frames())
@@ -66,7 +70,7 @@ async def test_handle_utterance_audio_ignores_non_final_segments() -> None:
 async def test_human_transfer_still_synthesizes_a_reply() -> None:
     stt = FakeSTTProvider([TranscriptSegment(text="Give me a human", is_final=True)])
     tts = FakeTTSProvider()
-    llm = FakeLLMProvider(responses=["human_transfer"])
+    llm = FakeLLMProvider(responses=[_structured("human_transfer", "Let me transfer you.")])
     pipeline = _pipeline(stt=stt, tts=tts, llm=llm)
 
     result = await pipeline.handle_utterance_audio(_frames())
