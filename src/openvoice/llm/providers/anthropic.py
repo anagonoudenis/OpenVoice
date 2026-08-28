@@ -7,7 +7,15 @@ import anthropic
 import structlog
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from openvoice.llm.base import BaseLLMProvider, LLMMessage, LLMProviderError, LLMResponse
+from openvoice.llm.base import (
+    BaseLLMProvider,
+    LLMMessage,
+    LLMMessageRole,
+    LLMProviderError,
+    LLMResponse,
+    ToolCall,
+    ToolDefinition,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -46,16 +54,21 @@ class AnthropicLLMProvider(BaseLLMProvider):
         system_prompt: str | None = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        tools: Sequence[ToolDefinition] | None = None,
     ) -> LLMResponse:
-        anthropic_messages = [{"role": m.role.value, "content": m.content} for m in messages]
         kwargs: dict[str, Any] = {
             "model": self._model,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "messages": anthropic_messages,
+            "messages": _to_anthropic_messages(messages),
         }
         if system_prompt is not None:
             kwargs["system"] = system_prompt
+        if tools:
+            kwargs["tools"] = [
+                {"name": t.name, "description": t.description, "input_schema": t.parameters}
+                for t in tools
+            ]
 
         async def _call() -> anthropic.types.Message:
             return await self._client.messages.create(**kwargs)  # type: ignore[no-any-return]
@@ -73,10 +86,68 @@ class AnthropicLLMProvider(BaseLLMProvider):
             logger.error("anthropic_call_failed", error=str(exc), model=self._model)
             raise LLMProviderError(f"Anthropic API call failed: {exc}") from exc
 
-        text = "".join(block.text for block in response.content if block.type == "text")
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append(
+                    ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
+                )
+
         return LLMResponse(
-            content=text,
+            content="".join(text_parts),
             model=response.model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            tool_calls=tool_calls or None,
         )
+
+
+def _to_anthropic_messages(messages: Sequence[LLMMessage]) -> list[dict[str, Any]]:
+    """Convert our provider-agnostic history into Anthropic's wire format.
+
+    Anthropic has no dedicated "tool" role: a tool result is a `user`
+    message with `tool_result` content blocks, and *all* results
+    answering one assistant turn's tool calls must land in a single such
+    message (the API rejects one `tool_result` per message for a
+    multi-tool turn) -- so consecutive `TOOL` messages in our history are
+    merged into one Anthropic message here, not sent one-by-one.
+    """
+    anthropic_messages: list[dict[str, Any]] = []
+    i = 0
+    while i < len(messages):
+        message = messages[i]
+
+        if message.role is LLMMessageRole.TOOL:
+            tool_result_blocks: list[dict[str, Any]] = []
+            while i < len(messages) and messages[i].role is LLMMessageRole.TOOL:
+                tool_result_blocks.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": messages[i].tool_call_id,
+                        "content": messages[i].content,
+                        "is_error": messages[i].tool_call_is_error,
+                    }
+                )
+                i += 1
+            anthropic_messages.append({"role": "user", "content": tool_result_blocks})
+            continue
+
+        if message.role is LLMMessageRole.ASSISTANT and message.tool_calls:
+            content_blocks: list[dict[str, Any]] = []
+            if message.content:
+                content_blocks.append({"type": "text", "text": message.content})
+            content_blocks.extend(
+                {"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.arguments}
+                for tc in message.tool_calls
+            )
+            anthropic_messages.append({"role": "assistant", "content": content_blocks})
+            i += 1
+            continue
+
+        anthropic_messages.append({"role": message.role.value, "content": message.content})
+        i += 1
+
+    return anthropic_messages

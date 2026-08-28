@@ -3,10 +3,9 @@
 ## Phase 1 — MVP (complete)
 
 Built in this order; each step passed lint + mypy strict + tests before
-the next began. Two known gaps carried forward, tracked below and in
-their respective ADR/step notes rather than hidden: LiveKit hasn't been
-smoke-tested against a live server, and booking isn't yet reachable via
-multi-turn voice conversation (only the REST API today).
+the next began. One known gap carried forward, tracked below and in its
+ADR rather than hidden: LiveKit hasn't been smoke-tested against a live
+server.
 
 1. [x] Project foundations: repo structure, `pyproject.toml`, `.gitignore`,
        README, MIT license, pre-commit.
@@ -22,9 +21,9 @@ multi-turn voice conversation (only the REST API today).
        before relying on it for real calls.
 7. [x] Appointment booking: Google Calendar integration, alternative-slot
        suggestion, SMS/email confirmation, cancel/reschedule. `BookingService`
-       is complete and unit tested; it is not yet wired into a multi-turn
-       voice conversation (LLM tool-calling/slot-filling for "what day
-       works for you?") — exposed via the REST API instead (Step 9).
+       is complete and unit tested; reachable both via the REST API and, since
+       Phase 1.1, purely by talking to the agent (native LLM tool-calling --
+       see `openvoice.agent.tools.booking`).
 8. [x] Lightweight CRM: caller recognition by phone number (via the SIP
        `sip.phoneNumber` participant attribute), call history,
        Celery-based post-call summaries.
@@ -45,12 +44,6 @@ multi-turn voice conversation (only the REST API today).
   tested against the real SDK's types (see ADR 0003), but no LiveKit
   server or SIP trunk was available in the development environment to
   place a real call through it. Do this first.
-- **Voice-driven booking isn't wired up.** `BookingService` is complete,
-  tested, and reachable via the REST API, but a caller can't yet book an
-  appointment purely by talking to the agent — that needs LLM
-  tool-calling/function-calling added to `ConversationManager` so it can
-  call `BookingService` mid-conversation (propose slots, confirm a time,
-  handle "actually, how about Tuesday instead").
 - **Docker Compose is unverified in this environment** (the dev machine's
   virtualization was disabled at the OS/BIOS level) but its config was
   validated with `docker compose config`. CI runs real Postgres/Redis
@@ -61,6 +54,29 @@ multi-turn voice conversation (only the REST API today).
   observability requirements), but nothing calls `sentry_sdk.init()` and
   there's no `/metrics` endpoint yet — structured logging is the only
   observability channel that's actually live today. Good first issue.
+
+## Phase 1.1 — Real-call hardening (complete)
+
+Everything here was found and fixed by actually placing calls through
+`console` mode and listening to the agent, not by mocked tests alone --
+see `CHANGELOG.md` for the full list of bugs this surfaced.
+
+- Native LLM tool-calling (`openvoice.llm.base.ToolDefinition`/`ToolCall`,
+  implemented for both the Anthropic and OpenAI-compatible providers) and
+  an agentic loop in `ConversationManager`, closing the voice-driven
+  booking gap: the agent can check availability, book, cancel, reschedule,
+  and list a caller's own appointments purely by talking
+  (`openvoice.agent.tools.booking`), gated on an explicit spoken
+  confirmation before any mutating action.
+- Per-turn latency roughly halved by merging intent classification and
+  reply generation into a single LLM call.
+- Fixed a silent "agent never replies" bug (a `livekit-agents` turn-taking
+  gate on `self.llm is not None`, unrelated to the STT/TTS pipeline it
+  looked like), a TTS sample-rate mismatch that made the voice sound slow
+  and robotic, and English-only replies regardless of the caller's
+  language.
+- VAD/turn-handling tuned for phone conversation and migrated off
+  deprecated `livekit-agents` APIs.
 
 ## Phase 2 — Post-MVP
 

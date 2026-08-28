@@ -7,13 +7,21 @@ import httpx
 import pytest
 from openai import APIConnectionError, AuthenticationError
 
-from openvoice.llm.base import LLMMessage, LLMMessageRole, LLMProviderError
+from openvoice.llm.base import (
+    LLMMessage,
+    LLMMessageRole,
+    LLMProviderError,
+    ToolCall,
+    ToolDefinition,
+)
 from openvoice.llm.providers.openai_compatible import OpenAICompatibleLLMProvider
 
 
-def _fake_response(text: str = "hello") -> SimpleNamespace:
+def _fake_response(
+    text: str = "hello", *, tool_calls: list[object] | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+        choices=[SimpleNamespace(message=SimpleNamespace(content=text, tool_calls=tool_calls))],
         model="gpt-4o",
         usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
     )
@@ -142,6 +150,114 @@ async def test_local_server_style_construction_without_api_key() -> None:
     result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert result.content == "local response"
+
+
+async def test_generate_passes_tool_definitions(provider: OpenAICompatibleLLMProvider) -> None:
+    mock_create = AsyncMock(return_value=_fake_response())
+    provider._client.chat.completions.create = mock_create  # type: ignore[method-assign]
+    tool = ToolDefinition(
+        name="check_availability",
+        description="Find open appointment slots.",
+        parameters={"type": "object", "properties": {}, "required": []},
+    )
+
+    await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")], tools=[tool])
+
+    sent_tools = mock_create.call_args.kwargs["tools"]
+    assert sent_tools == [
+        {
+            "type": "function",
+            "function": {
+                "name": "check_availability",
+                "description": "Find open appointment slots.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        }
+    ]
+
+
+async def test_generate_parses_tool_calls_from_response(
+    provider: OpenAICompatibleLLMProvider,
+) -> None:
+    raw_call = SimpleNamespace(
+        id="call_1",
+        function=SimpleNamespace(name="check_availability", arguments='{"duration_minutes": 30}'),
+    )
+    provider._client.chat.completions.create = AsyncMock(  # type: ignore[method-assign]
+        return_value=_fake_response("", tool_calls=[raw_call])
+    )
+
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
+
+    assert result.tool_calls == [
+        ToolCall(id="call_1", name="check_availability", arguments={"duration_minutes": 30})
+    ]
+
+
+async def test_generate_handles_malformed_tool_call_arguments_without_raising(
+    provider: OpenAICompatibleLLMProvider,
+) -> None:
+    raw_call = SimpleNamespace(
+        id="call_1", function=SimpleNamespace(name="check_availability", arguments="not json")
+    )
+    provider._client.chat.completions.create = AsyncMock(  # type: ignore[method-assign]
+        return_value=_fake_response("", tool_calls=[raw_call])
+    )
+
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
+
+    assert result.tool_calls is not None
+    assert result.tool_calls[0].arguments == {"_parse_error": "not json"}
+
+
+async def test_generate_sends_assistant_tool_call_and_tool_result_messages(
+    provider: OpenAICompatibleLLMProvider,
+) -> None:
+    mock_create = AsyncMock(return_value=_fake_response("Done"))
+    provider._client.chat.completions.create = mock_create  # type: ignore[method-assign]
+    history = [
+        LLMMessage(role=LLMMessageRole.USER, content="Book me a slot"),
+        LLMMessage(
+            role=LLMMessageRole.ASSISTANT,
+            content="",
+            tool_calls=[
+                ToolCall(id="call_1", name="check_availability", arguments={"duration_minutes": 30})
+            ],
+        ),
+        LLMMessage(role=LLMMessageRole.TOOL, content='{"slots": []}', tool_call_id="call_1"),
+    ]
+
+    await provider.generate(history)
+
+    sent = mock_create.call_args.kwargs["messages"]
+    assert sent[1]["tool_calls"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "check_availability", "arguments": '{"duration_minutes": 30}'},
+        }
+    ]
+    assert sent[2] == {"role": "tool", "tool_call_id": "call_1", "content": '{"slots": []}'}
+
+
+async def test_generate_marks_tool_error_in_content_for_openai_style(
+    provider: OpenAICompatibleLLMProvider,
+) -> None:
+    mock_create = AsyncMock(return_value=_fake_response("Sorry"))
+    provider._client.chat.completions.create = mock_create  # type: ignore[method-assign]
+    history = [
+        LLMMessage(
+            role=LLMMessageRole.TOOL,
+            content="slot no longer available",
+            tool_call_id="call_1",
+            tool_call_is_error=True,
+        )
+    ]
+
+    await provider.generate(history)
+
+    sent = mock_create.call_args.kwargs["messages"]
+    assert sent[0]["content"] == "Error: slot no longer available"
 
 
 async def test_hosted_compatible_provider_style_construction_with_api_key() -> None:

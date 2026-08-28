@@ -1,8 +1,11 @@
 """Tests for system prompt resolution."""
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
-from openvoice.agent.prompts import build_system_prompt
+from openvoice.agent.prompts import build_system_prompt, build_temporal_context
 from openvoice.config import Settings, get_settings
 
 
@@ -30,3 +33,19 @@ def test_explicit_prompt_overrides_default(monkeypatch: pytest.MonkeyPatch) -> N
     settings = _settings(monkeypatch, AGENT_SYSTEM_PROMPT="Custom instructions only.")
     prompt = build_system_prompt(settings)
     assert prompt == "Custom instructions only."
+
+
+def test_temporal_context_includes_resolved_date_and_utc_offset() -> None:
+    now = datetime(2026, 9, 1, 14, 30, tzinfo=ZoneInfo("UTC"))
+    context = build_temporal_context(timezone="Europe/Paris", now=now)
+
+    assert "Tuesday, September 01, 2026" in context
+    assert "+0200" in context  # Paris is UTC+2 in September (DST)
+
+
+def test_temporal_context_falls_back_to_utc_on_invalid_timezone() -> None:
+    now = datetime(2026, 9, 1, 14, 30, tzinfo=ZoneInfo("UTC"))
+
+    context = build_temporal_context(timezone="Not/A_Real_Zone", now=now)
+
+    assert "+0000" in context

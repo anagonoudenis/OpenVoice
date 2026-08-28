@@ -128,6 +128,24 @@ class TestBookAppointment:
         assert appointment.status is AppointmentStatus.CONFIRMED
 
 
+class TestListUpcomingAppointments:
+    async def test_queries_by_client_excluding_cancelled_ordered_by_start(self) -> None:
+        service = BookingService(calendar=FakeCalendarProvider(), sms=None, email=None)
+        client_id = uuid.uuid4()
+        expected = [object(), object()]
+        db_session = AsyncMock(spec=AsyncSession)
+        scalars_result = AsyncMock()
+        scalars_result.all = lambda: expected
+        db_session.execute = AsyncMock(return_value=AsyncMock(scalars=lambda: scalars_result))
+
+        result = await service.list_upcoming_appointments(
+            db_session=db_session, client_id=client_id
+        )
+
+        assert result == expected
+        db_session.execute.assert_awaited_once()
+
+
 class TestCancelAndReschedule:
     async def test_cancel_appointment_cancels_calendar_event(self) -> None:
         calendar = FakeCalendarProvider()

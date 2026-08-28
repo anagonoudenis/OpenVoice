@@ -6,9 +6,10 @@ appointment, and send SMS/email confirmations.
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from openvoice.calendar.base import BaseCalendarProvider, TimeSlot
@@ -116,6 +117,28 @@ class BookingService:
 
         await self._send_confirmation(client, appointment)
         return appointment
+
+    async def list_upcoming_appointments(
+        self, *, db_session: AsyncSession, client_id: uuid.UUID, now: datetime | None = None
+    ) -> list[Appointment]:
+        """Active (not cancelled), future appointments for one client, soonest first.
+
+        Exists mainly so a caller can be told "which appointment do you
+        mean?" before a cancel/reschedule action -- those need a real
+        `appointment_id`, which nothing else exposes to a phone caller who
+        doesn't have one in hand the way a REST API client would.
+        """
+        reference = now or datetime.now(UTC)
+        result = await db_session.execute(
+            select(Appointment)
+            .where(
+                Appointment.client_id == client_id,
+                Appointment.starts_at >= reference,
+                Appointment.status != AppointmentStatus.CANCELLED,
+            )
+            .order_by(Appointment.starts_at)
+        )
+        return list(result.scalars().all())
 
     async def cancel_appointment(
         self, *, db_session: AsyncSession, appointment: Appointment

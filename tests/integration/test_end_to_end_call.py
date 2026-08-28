@@ -33,6 +33,10 @@ async def _frames(chunk: bytes = b"\x00\x01") -> AsyncIterator[bytes]:
     yield chunk
 
 
+def _structured(intent: str, reply: str) -> str:
+    return f'{{"intent": "{intent}", "reply": "{reply}"}}'
+
+
 async def test_full_call_lifecycle_intake_to_summary(db_session: AsyncSession) -> None:
     # -- 1. Call intake: caller recognized/created by phone number ----------
     crm = CRMService()
@@ -50,7 +54,9 @@ async def test_full_call_lifecycle_intake_to_summary(db_session: AsyncSession) -
     await db_session.commit()
 
     # -- 2. First turn: STT -> agent (intent + LLM reply) -> TTS -----------
-    llm = FakeLLMProvider(responses=["support_question", "We're open Monday to Friday, 9 to 5."])
+    llm = FakeLLMProvider(
+        responses=[_structured("support_question", "We're open Monday to Friday, 9 to 5.")]
+    )
     conversation = ConversationManager(
         llm=llm, system_prompt="You are a helpful agent.", call_id=str(call_id)
     )
@@ -65,7 +71,7 @@ async def test_full_call_lifecycle_intake_to_summary(db_session: AsyncSession) -
     assert [c async for c in audio_stream] == [b"audio:We're open Monday to Friday, 9 to 5."]
 
     # -- 3. Second turn: the caller asks to book an appointment --------------
-    llm.responses.extend(["booking", "You're booked for tomorrow at 10am."])
+    llm.responses.append(_structured("booking", "You're booked for tomorrow at 10am."))
     stt._segments = [TranscriptSegment(text="Can I book an appointment?", is_final=True)]
 
     result = await pipeline.handle_utterance_audio(_frames())

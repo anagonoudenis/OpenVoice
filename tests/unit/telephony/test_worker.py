@@ -6,12 +6,15 @@ exercised here; `_transfer_to_human` and `_caller_phone_number` are pure
 enough (given a mocked `LiveKitAPI`/a fake room) to unit test properly.
 """
 
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 import structlog
 
+from openvoice.calendar.base import CalendarError
+from openvoice.config import Settings, get_settings
 from openvoice.telephony import worker
 
 
@@ -100,6 +103,69 @@ async def test_transfer_to_human_swallows_errors(monkeypatch: pytest.MonkeyPatch
 
     # Must not raise: a failed transfer must never crash the call.
     await worker._transfer_to_human(room_name="room-1", transfer_number="+15551234567", log=_log())
+
+
+def _settings() -> Settings:
+    get_settings.cache_clear()
+    return Settings(
+        secret_key="test-secret-key-please-ignore",
+        database_url="postgresql+asyncpg://test:test@localhost:5432/test",
+        anthropic_api_key="test-key",
+    )
+
+
+async def test_build_booking_tools_disabled_without_calendar_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_calendar_error(_settings: Settings) -> None:
+        raise CalendarError("no service account configured")
+
+    monkeypatch.setattr(worker, "get_calendar_provider", _raise_calendar_error)
+
+    tools, executor = worker._build_booking_tools(
+        settings=_settings(),
+        sessionmaker=AsyncMock(),
+        client_id=uuid.uuid4(),
+        call_id=uuid.uuid4(),
+        log=_log(),
+    )
+
+    assert tools is None
+    assert executor is None
+
+
+async def test_build_booking_tools_enabled_when_calendar_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker, "get_calendar_provider", lambda _settings: SimpleNamespace())
+    monkeypatch.setattr(
+        worker,
+        "get_sms_provider",
+        Mock(side_effect=RuntimeError("no Twilio credentials configured")),
+    )
+    monkeypatch.setattr(
+        worker,
+        "get_email_provider",
+        Mock(side_effect=RuntimeError("no Resend credentials configured")),
+    )
+
+    tools, executor = worker._build_booking_tools(
+        settings=_settings(),
+        sessionmaker=AsyncMock(),
+        client_id=uuid.uuid4(),
+        call_id=uuid.uuid4(),
+        log=_log(),
+    )
+
+    assert tools is not None
+    assert {t.name for t in tools} == {
+        "check_availability",
+        "list_my_appointments",
+        "book_appointment",
+        "cancel_appointment",
+        "reschedule_appointment",
+    }
+    assert callable(executor)
 
 
 def _ctx_with_participants(*attributes_list: dict[str, str]) -> SimpleNamespace:

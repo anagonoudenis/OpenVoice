@@ -40,7 +40,9 @@ Incoming call (LiveKit SIP)
   -> Caller resolved by phone number (CRM: get_or_create_client)
   -> AgentSession's Silero VAD segments continuous audio into utterances
   -> stt_node batch-transcribes each utterance via the configured STT provider
-  -> ConversationManager: intent detection, history, LLM provider call
+  -> ConversationManager: history, LLM provider call (intent + reply +
+     tool-calls in one structured response), tool-call loop when the
+     model requests a booking action
   -> llm_node routes the reply back into the session
   -> tts_node synthesizes the response via the configured TTS provider
   -> Streamed back over LiveKit; AgentSession owns barge-in/interruption handling
@@ -49,9 +51,11 @@ Incoming call (LiveKit SIP)
 ```
 
 Booking (find slots / book / cancel / reschedule) is a separate service
-(`BookingService`) invoked either from the REST API directly, or -- in a
-planned refinement, not yet built -- from the conversation via LLM
-tool-calling (see ROADMAP.md).
+(`BookingService`) invoked either from the REST API directly, or from
+the conversation itself via native LLM tool-calling
+(`openvoice.agent.tools.booking`, wired into `ConversationManager`) --
+gated on the caller having a resolved identity and a calendar provider
+being configured; see ROADMAP.md.
 
 Every external call in this path (STT, LLM, TTS, calendar, DB, Redis) is
 wrapped with an explicit timeout and a `tenacity` exponential-backoff retry.

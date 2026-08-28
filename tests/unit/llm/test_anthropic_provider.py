@@ -7,7 +7,13 @@ import httpx
 import pytest
 from anthropic import APIConnectionError, AuthenticationError
 
-from openvoice.llm.base import LLMMessage, LLMMessageRole, LLMProviderError
+from openvoice.llm.base import (
+    LLMMessage,
+    LLMMessageRole,
+    LLMProviderError,
+    ToolCall,
+    ToolDefinition,
+)
 from openvoice.llm.providers.anthropic import AnthropicLLMProvider
 
 
@@ -113,6 +119,111 @@ async def test_generate_awaits_a_sync_wrapper_that_returns_a_coroutine(
     result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
 
     assert result.content == "really awaited"
+
+
+async def test_generate_passes_tool_definitions(provider: AnthropicLLMProvider) -> None:
+    mock_create = AsyncMock(return_value=_fake_response())
+    provider._client.messages.create = mock_create  # type: ignore[method-assign]
+    tool = ToolDefinition(
+        name="check_availability",
+        description="Find open appointment slots.",
+        parameters={"type": "object", "properties": {}, "required": []},
+    )
+
+    await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")], tools=[tool])
+
+    sent_tools = mock_create.call_args.kwargs["tools"]
+    assert sent_tools == [
+        {
+            "name": "check_availability",
+            "description": "Find open appointment slots.",
+            "input_schema": {"type": "object", "properties": {}, "required": []},
+        }
+    ]
+
+
+async def test_generate_parses_tool_use_blocks_from_response(
+    provider: AnthropicLLMProvider,
+) -> None:
+    response = SimpleNamespace(
+        content=[
+            SimpleNamespace(type="text", text="Let me check."),
+            SimpleNamespace(
+                type="tool_use",
+                id="toolu_1",
+                name="check_availability",
+                input={"duration_minutes": 30},
+            ),
+        ],
+        model="claude-sonnet-5",
+        usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+    )
+    provider._client.messages.create = AsyncMock(return_value=response)  # type: ignore[method-assign]
+
+    result = await provider.generate([LLMMessage(role=LLMMessageRole.USER, content="Hi")])
+
+    assert result.content == "Let me check."
+    assert result.tool_calls == [
+        ToolCall(id="toolu_1", name="check_availability", arguments={"duration_minutes": 30})
+    ]
+
+
+async def test_generate_merges_consecutive_tool_results_into_one_user_message(
+    provider: AnthropicLLMProvider,
+) -> None:
+    mock_create = AsyncMock(return_value=_fake_response())
+    provider._client.messages.create = mock_create  # type: ignore[method-assign]
+    history = [
+        LLMMessage(role=LLMMessageRole.USER, content="Book me two things"),
+        LLMMessage(
+            role=LLMMessageRole.ASSISTANT,
+            content="On it.",
+            tool_calls=[
+                ToolCall(id="toolu_1", name="check_availability", arguments={}),
+                ToolCall(
+                    id="toolu_2", name="check_availability", arguments={"duration_minutes": 60}
+                ),
+            ],
+        ),
+        LLMMessage(role=LLMMessageRole.TOOL, content="slot A", tool_call_id="toolu_1"),
+        LLMMessage(
+            role=LLMMessageRole.TOOL,
+            content="no slots",
+            tool_call_id="toolu_2",
+            tool_call_is_error=True,
+        ),
+    ]
+
+    await provider.generate(history)
+
+    sent = mock_create.call_args.kwargs["messages"]
+    assert sent[1]["content"] == [
+        {"type": "text", "text": "On it."},
+        {"type": "tool_use", "id": "toolu_1", "name": "check_availability", "input": {}},
+        {
+            "type": "tool_use",
+            "id": "toolu_2",
+            "name": "check_availability",
+            "input": {"duration_minutes": 60},
+        },
+    ]
+    assert sent[2] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_1",
+                "content": "slot A",
+                "is_error": False,
+            },
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_2",
+                "content": "no slots",
+                "is_error": True,
+            },
+        ],
+    }
 
 
 async def test_generate_does_not_retry_non_retryable_error(provider: AnthropicLLMProvider) -> None:

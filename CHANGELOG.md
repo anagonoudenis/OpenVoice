@@ -6,6 +6,56 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
 
 ## [Unreleased]
 
+### Added — Phase 1.1: voice-driven booking (native LLM tool-calling)
+
+- **`BaseLLMProvider.generate()` now supports tools.** New
+  `ToolDefinition`/`ToolCall` types in `openvoice.llm.base`, a `tools=`
+  parameter, and a `tool_calls` field on `LLMResponse` and (for feeding
+  results back) `LLMMessage`. Implemented natively in both providers
+  against the real installed SDKs (verified via introspection, not
+  guessed): Anthropic's `tool_use`/`tool_result` content blocks --
+  including merging consecutive tool results into one `user` message,
+  which Anthropic's API requires -- and OpenAI-compatible's
+  `tool_calls`/`role: "tool"` messages (works the same for DeepSeek/
+  Kimi/Qwen/Groq, since they all speak the same wire protocol).
+- **`ConversationManager` runs an agentic tool loop.** When the model
+  requests a tool call, it's executed and the result fed back, up to
+  `max_tool_iterations` (default 4) before the turn falls back to a
+  human-transfer message -- a misbehaving model or a failing tool can't
+  turn one caller utterance into an unbounded loop on a live call.
+  History trimming (`_trim_history`) now cuts on user-message
+  boundaries, not a raw message count, since a tool-calling turn has
+  more than the usual two messages and an arbitrary cut could split a
+  tool-call/tool-result pair, producing a request the LLM APIs reject.
+- **Booking tools** (`openvoice.agent.tools.booking`): `check_availability`,
+  `list_my_appointments`, `book_appointment`, `cancel_appointment`,
+  `reschedule_appointment`, mapped onto the existing `BookingService`.
+  Mutating tools require `caller_confirmed: true` in their arguments,
+  *enforced in code* (the dispatcher rejects the call otherwise) --
+  not just requested via prompt text -- so the model can't silently book
+  or cancel something the instant it resolves a date from a possibly
+  mistranscribed request. Cancel/reschedule also re-verify the
+  appointment belongs to the caller's own `client_id` before acting on
+  it. Added `BookingService.list_upcoming_appointments` to support this
+  (a caller has no appointment ID in hand the way a REST API client
+  would).
+- **The agent now knows the current date/time.**
+  `openvoice.agent.prompts.build_temporal_context` tells the model the
+  current date/time in the business's configured timezone
+  (`BOOKING_TIMEZONE`), so it can resolve "tomorrow afternoon" or "next
+  Monday" into a real, timezone-aware datetime for a booking tool call.
+  Booking tools reject a datetime with no UTC offset outright rather
+  than silently guessing a timezone.
+- **Wired into the telephony worker**
+  (`openvoice.telephony.worker._build_booking_tools`): booking tools are
+  enabled only when a calendar provider is configured *and* the caller's
+  phone number resolved to a client (a console/test-harness session with
+  no SIP participant gets a fully working agent, just without booking --
+  same graceful-degradation pattern already used for optional SMS/email).
+  Tool-call/tool-result messages are excluded from the persisted
+  call transcript (and the post-call LLM summary that reads it) --
+  they aren't something either party "said".
+
 ### Added — Phase 1 MVP
 
 - Project foundations: `uv`-managed `pyproject.toml`, ruff, mypy strict,

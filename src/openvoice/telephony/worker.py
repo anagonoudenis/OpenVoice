@@ -21,15 +21,27 @@ import structlog
 from livekit import agents, api
 from livekit.agents import AgentServer, AgentSession, JobContext, TurnHandlingOptions
 from livekit.plugins import silero
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from openvoice.agent.conversation import ConversationManager
-from openvoice.agent.prompts import build_system_prompt
-from openvoice.config import get_settings
+from openvoice.agent.prompts import build_system_prompt, build_temporal_context
+from openvoice.agent.tools.base import ToolExecutor
+from openvoice.agent.tools.booking import (
+    BOOKING_SYSTEM_PROMPT_ADDENDUM,
+    booking_tool_definitions,
+    make_booking_tool_executor,
+)
+from openvoice.booking.service import BookingService
+from openvoice.calendar.base import CalendarError
+from openvoice.calendar.factory import get_calendar_provider
+from openvoice.config import Settings, get_settings
 from openvoice.crm.service import CRMService
 from openvoice.db.models import Call, CallDirection, CallStatus, CallTranscript, SpeakerRole
 from openvoice.db.session import get_sessionmaker
+from openvoice.llm.base import LLMMessageRole, ToolDefinition
 from openvoice.llm.factory import get_llm_provider
 from openvoice.logging import configure_logging
+from openvoice.notifications.factory import get_email_provider, get_sms_provider
 from openvoice.stt.factory import get_stt_provider
 from openvoice.tasks.summarize_call import summarize_call_task
 from openvoice.telephony.livekit_agent import OpenVoiceAgent
@@ -80,6 +92,53 @@ async def _transfer_to_human(
         log.error("transfer_to_human_failed", error=str(exc))
 
 
+def _build_booking_tools(
+    *,
+    settings: Settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    client_id: uuid.UUID,
+    call_id: uuid.UUID,
+    log: structlog.stdlib.BoundLogger,
+) -> tuple[list[ToolDefinition], ToolExecutor] | tuple[None, None]:
+    """Build booking tools for this call, or `(None, None)` if calendar
+    isn't configured. Booking is an optional sub-feature -- same as
+    `openvoice.api.dependencies.get_booking_service` -- so a deployment
+    without Google Calendar credentials still gets a working agent, just
+    without booking actions; SMS/email confirmations are independently
+    optional on top of that.
+    """
+    try:
+        calendar = get_calendar_provider(settings)
+    except CalendarError as exc:
+        log.info("booking_tools_disabled_no_calendar_provider", error=str(exc))
+        return None, None
+
+    try:
+        sms = get_sms_provider(settings)
+    except RuntimeError:
+        sms = None
+    try:
+        email = get_email_provider(settings)
+    except RuntimeError:
+        email = None
+
+    booking_service = BookingService(
+        calendar=calendar,
+        sms=sms,
+        email=email,
+        business_hours_start=settings.booking_business_hours_start,
+        business_hours_end=settings.booking_business_hours_end,
+        default_duration_minutes=settings.booking_default_duration_minutes,
+    )
+    executor = make_booking_tool_executor(
+        booking_service=booking_service,
+        sessionmaker=sessionmaker,
+        client_id=client_id,
+        call_id=call_id,
+    )
+    return booking_tool_definitions(), executor
+
+
 def _caller_phone_number(ctx: JobContext) -> str | None:
     """Read the caller's number off the inbound SIP participant, if any.
 
@@ -113,15 +172,7 @@ async def entrypoint(ctx: JobContext) -> None:
     log = logger.bind(call_id=str(call_id), room=ctx.room.name)
     log.info("call_started")
 
-    conversation = ConversationManager(
-        llm=get_llm_provider(settings),
-        system_prompt=build_system_prompt(settings),
-        call_id=str(call_id),
-        max_history_turns=settings.agent_max_history_turns,
-    )
-    vad_provider = silero.VAD.load(
-        min_silence_duration=settings.vad_min_silence_duration_seconds
-    )
+    vad_provider = silero.VAD.load(min_silence_duration=settings.vad_min_silence_duration_seconds)
 
     crm = CRMService()
     phone_number = _caller_phone_number(ctx)
@@ -146,6 +197,35 @@ async def entrypoint(ctx: JobContext) -> None:
         db_session.add(call_row)
         await db_session.commit()
 
+    system_prompt = build_system_prompt(settings) + build_temporal_context(
+        timezone=settings.booking_timezone
+    )
+    tools: list[ToolDefinition] | None = None
+    tool_executor: ToolExecutor | None = None
+    # Booking actions need a resolved caller identity (`client_id`) to book
+    # on behalf of -- console/test-harness sessions with no SIP participant
+    # have none, so they get a fully working agent minus booking, same as
+    # any deployment without calendar credentials configured.
+    if client_id is not None:
+        tools, tool_executor = _build_booking_tools(
+            settings=settings,
+            sessionmaker=sessionmaker,
+            client_id=client_id,
+            call_id=call_id,
+            log=log,
+        )
+        if tools is not None:
+            system_prompt += BOOKING_SYSTEM_PROMPT_ADDENDUM
+
+    conversation = ConversationManager(
+        llm=get_llm_provider(settings),
+        system_prompt=system_prompt,
+        call_id=str(call_id),
+        max_history_turns=settings.agent_max_history_turns,
+        tools=tools,
+        tool_executor=tool_executor,
+    )
+
     async def on_transfer_to_human() -> None:
         await _transfer_to_human(
             room_name=ctx.room.name,
@@ -161,7 +241,14 @@ async def entrypoint(ctx: JobContext) -> None:
             db_call.status = CallStatus.COMPLETED
             db_call.ended_at = datetime.now(UTC)
             for i, message in enumerate(conversation.history):
-                is_caller = message.role.value == "user"
+                # Tool-call/tool-result messages aren't something either
+                # party "said" -- skip them (and any tool-call-only
+                # assistant turn with no accompanying text) so the
+                # transcript stays human-readable and the post-call LLM
+                # summary isn't fed raw JSON tool payloads.
+                if message.role is LLMMessageRole.TOOL or not message.content:
+                    continue
+                is_caller = message.role is LLMMessageRole.USER
                 db_session.add(
                     CallTranscript(
                         call_id=call_id,
