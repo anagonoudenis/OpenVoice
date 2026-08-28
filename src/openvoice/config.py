@@ -150,6 +150,14 @@ class Settings(BaseSettings):
     agent_system_prompt: str | None = None
     agent_max_history_turns: int = 20
     agent_human_transfer_number: str | None = None
+    # Hard caps on a single call's LLM/TTS usage: without one, nothing stops
+    # a call (a stuck caller, a runaway tool-calling loop, an abusive caller)
+    # from running indefinitely and racking up paid API calls turn after
+    # turn. Once either is hit, the agent hands off to a human instead of
+    # generating another reply. `None` disables the respective cap -- do
+    # that deliberately, not by leaving it unset by accident.
+    agent_max_conversation_turns: int | None = 40
+    agent_max_call_duration_seconds: float | None = 900.0
 
     # --- Voice turn-taking (silero VAD, tuned for phone conversation) --------
     # The default (0.55s) was tuned for generic use; phone callers expect a

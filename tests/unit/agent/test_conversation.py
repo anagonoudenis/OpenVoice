@@ -1,5 +1,7 @@
 """Tests for ConversationManager."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from openvoice.agent.base import Intent
@@ -261,3 +263,51 @@ async def test_history_trim_never_splits_a_tool_exchange() -> None:
 
     assert [m.role for m in manager.history] == [LLMMessageRole.USER, LLMMessageRole.ASSISTANT]
     assert manager.history[0].content == "second, plain"
+
+
+async def test_max_conversation_turns_forces_transfer_without_calling_llm() -> None:
+    llm = FakeLLMProvider(responses=[_structured("general", "reply 1")])
+    manager = ConversationManager(
+        llm=llm,
+        system_prompt="You are helpful.",
+        call_id="call-1",
+        max_conversation_turns=1,
+    )
+
+    first = await manager.handle_utterance("hello")
+    second = await manager.handle_utterance("still here")
+
+    assert first.transfer_to_human is False
+    assert second.transfer_to_human is True
+    assert second.intent is Intent.HUMAN_TRANSFER
+    # The limit is checked *before* calling the LLM -- the second turn
+    # must not have cost an API call.
+    assert len(llm.calls) == 1
+
+
+async def test_max_call_duration_forces_transfer() -> None:
+    llm = FakeLLMProvider(responses=[_structured("general", "reply")])
+    call_started_at = datetime.now(UTC) - timedelta(seconds=1000)
+    manager = ConversationManager(
+        llm=llm,
+        system_prompt="You are helpful.",
+        call_id="call-1",
+        max_call_duration_seconds=900.0,
+        call_started_at=call_started_at,
+    )
+
+    reply = await manager.handle_utterance("hello")
+
+    assert reply.transfer_to_human is True
+    assert reply.intent is Intent.HUMAN_TRANSFER
+    assert len(llm.calls) == 0
+
+
+async def test_no_call_limits_by_default() -> None:
+    llm = FakeLLMProvider()
+    manager = ConversationManager(llm=llm, system_prompt="You are helpful.", call_id="call-1")
+
+    for i in range(50):
+        llm.responses.append(_structured("general", f"reply {i}"))
+        reply = await manager.handle_utterance(f"utterance {i}")
+        assert reply.transfer_to_human is False

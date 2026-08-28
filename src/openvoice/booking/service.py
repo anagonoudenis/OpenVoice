@@ -95,7 +95,35 @@ class BookingService:
         A failed confirmation message is logged, not raised: the calendar
         event and DB row already succeeded by that point, and a
         notification failure must never undo a real booking.
+
+        Guards against double-booking the same client: an exact repeat of
+        an existing active appointment (same start/end) is idempotent --
+        returns the existing row instead of creating a duplicate calendar
+        event, which matters because nothing upstream stops a caller (or a
+        confused LLM tool-calling loop) from asking to book the same slot
+        twice. A *different*, merely overlapping time raises `BookingError`
+        instead, since that's a real conflict the caller should be told
+        about, not silently resolved. This only protects against
+        overlap within one client's own appointments in a single request
+        path -- it is not a database-level exclusion constraint, so a
+        genuine race between two concurrent bookings for the same client
+        (e.g. from two simultaneous calls) is not fully closed.
         """
+        existing = await self._find_overlapping_appointment(
+            db_session=db_session, client_id=client.id, start=start, end=end
+        )
+        if existing is not None:
+            if existing.starts_at == start and existing.ends_at == end:
+                logger.info(
+                    "book_appointment_idempotent_duplicate", appointment_id=str(existing.id)
+                )
+                return existing
+            raise BookingError(
+                "This client already has an appointment from "
+                f"{existing.starts_at.isoformat()} to {existing.ends_at.isoformat()} "
+                "that overlaps the requested time."
+            )
+
         event = await self._calendar.create_event(
             start=start,
             end=end,
@@ -170,6 +198,20 @@ class BookingService:
         await db_session.commit()
         await db_session.refresh(appointment)
         return appointment
+
+    async def _find_overlapping_appointment(
+        self, *, db_session: AsyncSession, client_id: uuid.UUID, start: datetime, end: datetime
+    ) -> Appointment | None:
+        """The client's own active appointment overlapping `[start, end)`, if any."""
+        result = await db_session.execute(
+            select(Appointment).where(
+                Appointment.client_id == client_id,
+                Appointment.status != AppointmentStatus.CANCELLED,
+                Appointment.starts_at < end,
+                Appointment.ends_at > start,
+            )
+        )
+        return result.scalars().first()
 
     async def _send_confirmation(self, client: Client, appointment: Appointment) -> None:
         when = appointment.starts_at.strftime("%A %B %d at %H:%M")

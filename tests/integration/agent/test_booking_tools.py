@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from openvoice.agent.tools.base import ToolExecutor
@@ -145,6 +146,40 @@ async def test_book_appointment_creates_real_appointment_row(
         assert created is not None
         assert created.client_id == client.id
         assert created.status is AppointmentStatus.CONFIRMED
+
+
+async def test_repeating_the_same_book_appointment_call_does_not_duplicate(
+    db_session: AsyncSession, db_engine: AsyncEngine
+) -> None:
+    """Regression test, exercised through the actual tool-dispatch path a
+    live call uses: nothing stops an LLM tool-calling loop from issuing
+    book_appointment twice for the same request (a retried turn, a
+    confused model) -- the second call must not create a second
+    appointment/calendar event.
+    """
+    client = await _make_client(db_session, phone_number="+15550013")
+    calendar = FakeCalendarProvider()
+    execute = _executor(db_engine, client_id=client.id, calendar=calendar)
+    call = ToolCall(
+        id="1",
+        name="book_appointment",
+        arguments={"start": _FUTURE_START, "end": _FUTURE_END, "caller_confirmed": True},
+    )
+
+    first_content, first_is_error = await execute(call)
+    second_content, second_is_error = await execute(call)
+
+    assert first_is_error is False
+    assert second_is_error is False
+    assert first_content == second_content  # same appointment_id both times
+    assert len(calendar.created) == 1  # only one real calendar event was created
+
+    sessionmaker = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with sessionmaker() as verify_session:
+        result = await verify_session.execute(
+            select(Appointment).where(Appointment.client_id == client.id)
+        )
+        assert len(result.scalars().all()) == 1
 
 
 async def test_list_my_appointments_only_shows_this_clients_upcoming_ones(

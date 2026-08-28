@@ -23,3 +23,11 @@ def test_lifespan_runs_on_startup_and_shutdown(required_env: None) -> None:
     with TestClient(create_app()) as client:
         response = client.get("/health")
         assert response.status_code == 200
+
+
+def test_metrics_endpoint_exposes_prometheus_format(required_env: None) -> None:
+    client = TestClient(create_app())
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["content-type"]
+    assert "python_gc_objects_collected_total" in response.text

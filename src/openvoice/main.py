@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from prometheus_client import make_asgi_app
 
 from openvoice.api.routers import appointments, calls, clients, health
 from openvoice.booking.service import BookingError
@@ -13,6 +14,7 @@ from openvoice.calendar.base import CalendarError
 from openvoice.config import get_settings
 from openvoice.logging import configure_logging
 from openvoice.notifications.base import NotificationError
+from openvoice.observability import configure_sentry
 
 logger = structlog.get_logger(__name__)
 
@@ -22,6 +24,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application startup/shutdown hook."""
     settings = get_settings()
     configure_logging(environment=settings.environment, log_level=settings.log_level)
+    configure_sentry(settings)
     logger.info("app_starting", environment=settings.environment.value)
     yield
     logger.info("app_stopping")
@@ -43,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(clients.router)
     app.include_router(calls.router)
     app.include_router(appointments.router)
+    app.mount("/metrics", make_asgi_app())
 
     @app.exception_handler(CalendarError)
     async def _calendar_error_handler(_request: Request, exc: CalendarError) -> JSONResponse:

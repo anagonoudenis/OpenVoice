@@ -13,6 +13,7 @@ available to test against. See `openvoice.telephony.livekit_agent` for
 what was and wasn't verified against the installed SDK.
 """
 
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -23,6 +24,7 @@ from livekit.agents import AgentServer, AgentSession, JobContext, TurnHandlingOp
 from livekit.plugins import silero
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from openvoice import metrics
 from openvoice.agent.conversation import ConversationManager
 from openvoice.agent.prompts import build_system_prompt, build_temporal_context
 from openvoice.agent.tools.base import ToolExecutor
@@ -42,6 +44,7 @@ from openvoice.llm.base import LLMMessageRole, ToolDefinition
 from openvoice.llm.factory import get_llm_provider
 from openvoice.logging import configure_logging
 from openvoice.notifications.factory import get_email_provider, get_sms_provider
+from openvoice.observability import configure_sentry
 from openvoice.stt.factory import get_stt_provider
 from openvoice.tasks.summarize_call import summarize_call_task
 from openvoice.telephony.livekit_agent import OpenVoiceAgent
@@ -165,12 +168,15 @@ def _caller_phone_number(ctx: JobContext) -> str | None:
 async def entrypoint(ctx: JobContext) -> None:
     settings = get_settings()
     configure_logging(environment=settings.environment, log_level=settings.log_level)
+    configure_sentry(settings)
 
     await ctx.connect()
 
     call_id = uuid.uuid4()
+    call_start_time = time.monotonic()
     log = logger.bind(call_id=str(call_id), room=ctx.room.name)
     log.info("call_started")
+    metrics.calls_started_total.inc()
 
     vad_provider = silero.VAD.load(min_silence_duration=settings.vad_min_silence_duration_seconds)
 
@@ -224,6 +230,8 @@ async def entrypoint(ctx: JobContext) -> None:
         max_history_turns=settings.agent_max_history_turns,
         tools=tools,
         tool_executor=tool_executor,
+        max_conversation_turns=settings.agent_max_conversation_turns,
+        max_call_duration_seconds=settings.agent_max_call_duration_seconds,
     )
 
     async def on_transfer_to_human() -> None:
@@ -259,6 +267,8 @@ async def entrypoint(ctx: JobContext) -> None:
                 )
             await db_session.commit()
         log.info("call_finalized")
+        metrics.calls_completed_total.labels(outcome="completed").inc()
+        metrics.call_duration_seconds.observe(time.monotonic() - call_start_time)
 
         try:
             summarize_call_task.delay(str(call_id))

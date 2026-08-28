@@ -6,6 +6,53 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
 
 ## [Unreleased]
 
+### Added — Phase 1.2: production-reliability hardening
+
+Found by a full-project audit specifically looking for what could go
+wrong once real calls and real bookings start happening, not by
+incremental feature work.
+
+- **Sentry + Prometheus, actually wired up.** `Settings.sentry_dsn`
+  existed since Phase 1 but nothing ever called `sentry_sdk.init()`, and
+  there was no `/metrics` endpoint despite `prometheus-client` being a
+  dependency -- structured logging was the only real observability
+  channel. New `openvoice.observability.configure_sentry`, called from
+  each of the three process entrypoints this app runs as (API server,
+  telephony worker, Celery worker) since each can crash independently.
+  New `openvoice.metrics`: call volume/duration, LLM error count, and
+  tool-call outcomes, mounted at `/metrics` on the API app.
+- **Call duration/turn caps** (`AGENT_MAX_CONVERSATION_TURNS`,
+  `AGENT_MAX_CALL_DURATION_SECONDS`, defaults 40 / 900s). Nothing
+  previously stopped a single call from running indefinitely and paying
+  for an LLM/TTS call on every turn. `ConversationManager` now hands the
+  call to a human once either limit is hit -- checked *before* calling
+  the LLM, so hitting the cap itself costs nothing further.
+
+### Fixed
+
+- **Double-booking.** `BookingService.book_appointment` never checked
+  whether the client already had an overlapping appointment before
+  creating a new one -- nothing stopped a caller (or a confused LLM
+  tool-calling loop retrying a turn) from booking the same slot twice,
+  creating two real calendar events. An exact repeat (identical
+  start/end) is now idempotent, returning the existing appointment
+  instead of duplicating it; a genuinely different but overlapping time
+  now raises `BookingError` so the caller is told about the conflict.
+  This only guards within one request path, not with a database-level
+  exclusion constraint -- a true race between two simultaneous calls for
+  the same client isn't fully closed.
+- **Celery could stall call teardown for minutes.** `celery_app.py` never
+  configured broker-connection retry behavior, so Celery/Kombu's default
+  (up to 100 reconnection attempts) applied. `summarize_call_task.delay()`
+  is called synchronously from the live call-teardown path
+  (`openvoice.telephony.worker.finalize_call`) specifically wrapped in a
+  try/except so a broker outage can't break call teardown -- but with the
+  default retry budget, that `.delay()` call itself could block for
+  minutes before the try/except ever got a chance to catch anything,
+  stalling the whole worker process. Reduced to one retry with a 2s
+  timeout: the post-call summary was already best-effort, so failing
+  fast costs nothing a real Redis outage wasn't already going to cost.
+
 ### Added — Phase 1.1: voice-driven booking (native LLM tool-calling)
 
 - **`BaseLLMProvider.generate()` now supports tools.** New

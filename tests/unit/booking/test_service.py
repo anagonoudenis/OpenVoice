@@ -6,14 +6,14 @@ real database: every field asserted on is set explicitly by
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from openvoice.booking.service import BookingError, BookingService
 from openvoice.calendar.base import TimeSlot
-from openvoice.db.models import AppointmentStatus, Client
+from openvoice.db.models import Appointment, AppointmentStatus, Client
 from tests.unit.booking.fakes import FakeCalendarProvider, FakeEmailProvider, FakeSMSProvider
 
 
@@ -27,8 +27,16 @@ def _client(**overrides: object) -> Client:
     return Client(**defaults)  # type: ignore[arg-type]
 
 
-def _db_session() -> AsyncSession:
-    return AsyncMock(spec=AsyncSession)
+def _db_session(*, existing_overlap: Appointment | None = None) -> AsyncSession:
+    """A mocked session whose `execute(...).scalars().first()` -- used by
+    `BookingService._find_overlapping_appointment` -- returns
+    `existing_overlap` (default `None`, i.e. no conflicting appointment).
+    """
+    session = AsyncMock(spec=AsyncSession)
+    scalars_result = Mock()
+    scalars_result.first.return_value = existing_overlap
+    session.execute = AsyncMock(return_value=Mock(scalars=Mock(return_value=scalars_result)))
+    return session
 
 
 class TestFindAvailableSlots:
@@ -126,6 +134,71 @@ class TestBookAppointment:
         )
 
         assert appointment.status is AppointmentStatus.CONFIRMED
+
+    async def test_identical_repeat_booking_is_idempotent(self) -> None:
+        """Regression test: nothing upstream stops a caller (or a confused
+        LLM tool-calling loop) from asking to book the same slot twice --
+        the second call must return the existing appointment, not create a
+        duplicate calendar event.
+        """
+        calendar = FakeCalendarProvider()
+        client = _client()
+        start = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+        end = datetime(2026, 9, 1, 10, 30, tzinfo=UTC)
+        existing = Appointment(
+            id=uuid.uuid4(),
+            client_id=client.id,
+            starts_at=start,
+            ends_at=end,
+            status=AppointmentStatus.CONFIRMED,
+            calendar_event_id="evt-existing",
+        )
+        service = BookingService(calendar=calendar, sms=None, email=None)
+
+        result = await service.book_appointment(
+            db_session=_db_session(existing_overlap=existing),
+            client=client,
+            start=start,
+            end=end,
+        )
+
+        assert result is existing
+        assert calendar.created == []  # no new calendar event was created
+
+    async def test_overlapping_different_time_raises_booking_error(self) -> None:
+        client = _client()
+        existing = Appointment(
+            id=uuid.uuid4(),
+            client_id=client.id,
+            starts_at=datetime(2026, 9, 1, 10, 0, tzinfo=UTC),
+            ends_at=datetime(2026, 9, 1, 10, 30, tzinfo=UTC),
+            status=AppointmentStatus.CONFIRMED,
+            calendar_event_id="evt-existing",
+        )
+        service = BookingService(calendar=FakeCalendarProvider(), sms=None, email=None)
+
+        with pytest.raises(BookingError, match="already has an appointment"):
+            await service.book_appointment(
+                db_session=_db_session(existing_overlap=existing),
+                client=client,
+                start=datetime(2026, 9, 1, 10, 15, tzinfo=UTC),
+                end=datetime(2026, 9, 1, 10, 45, tzinfo=UTC),
+            )
+
+    async def test_non_overlapping_second_appointment_is_allowed(self) -> None:
+        calendar = FakeCalendarProvider()
+        client = _client()
+        service = BookingService(calendar=calendar, sms=None, email=None)
+
+        appointment = await service.book_appointment(
+            db_session=_db_session(existing_overlap=None),
+            client=client,
+            start=datetime(2026, 9, 1, 14, 0, tzinfo=UTC),
+            end=datetime(2026, 9, 1, 14, 30, tzinfo=UTC),
+        )
+
+        assert appointment.status is AppointmentStatus.CONFIRMED
+        assert len(calendar.created) == 1
 
 
 class TestListUpcomingAppointments:

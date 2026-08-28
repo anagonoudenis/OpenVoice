@@ -1,9 +1,11 @@
 """Per-call conversation orchestration: history, LLM turn-taking, tool-calling, fallback."""
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import structlog
 
+from openvoice import metrics
 from openvoice.agent.base import AgentReply, Intent
 from openvoice.agent.structured_reply import build_structured_system_prompt, parse_structured_reply
 from openvoice.agent.tools.base import ToolExecutor
@@ -21,6 +23,11 @@ logger = structlog.get_logger(__name__)
 _FALLBACK_MESSAGE = (
     "I'm sorry, I'm having trouble processing that right now. "
     "Let me transfer you to a member of our team."
+)
+
+_CALL_LIMIT_MESSAGE = (
+    "We've been on the line for a while -- let me transfer you to a member "
+    "of our team so we can keep helping you."
 )
 
 # Both mean "a human should pick this up": urgent issues still get a
@@ -49,6 +56,15 @@ class ConversationManager:
     final natural-language reply. The iteration cap exists so a
     misbehaving model (or a tool that keeps failing) can't turn one
     caller utterance into an unbounded, ever-billing loop on a live call.
+
+    `max_conversation_turns`/`max_call_duration_seconds` cap the whole
+    call, not one utterance: without them, nothing stops a stuck caller,
+    an abusive one, or just a very long conversation from running
+    indefinitely and paying for an LLM/TTS call on every turn. Once
+    either is hit, the agent hands off to a human (or ends the call, if
+    no transfer number is configured) instead of generating another
+    reply -- checked *before* calling the LLM, so hitting the cap costs
+    nothing further.
     """
 
     def __init__(
@@ -61,6 +77,9 @@ class ConversationManager:
         tools: Sequence[ToolDefinition] | None = None,
         tool_executor: ToolExecutor | None = None,
         max_tool_iterations: int = 4,
+        max_conversation_turns: int | None = None,
+        max_call_duration_seconds: float | None = None,
+        call_started_at: datetime | None = None,
     ) -> None:
         if bool(tools) != bool(tool_executor):
             raise ValueError("tools and tool_executor must be provided together, or not at all")
@@ -72,6 +91,10 @@ class ConversationManager:
         self._tools = list(tools) if tools else None
         self._tool_executor = tool_executor
         self._max_tool_iterations = max_tool_iterations
+        self._max_conversation_turns = max_conversation_turns
+        self._max_call_duration_seconds = max_call_duration_seconds
+        self._call_started_at = call_started_at or datetime.now(UTC)
+        self._turn_count = 0
         self._history: list[LLMMessage] = []
 
     @property
@@ -84,6 +107,17 @@ class ConversationManager:
         log = logger.bind(call_id=self._call_id)
         log.info("utterance_received", text=caller_text)
 
+        if self._call_limit_reached():
+            log.warning(
+                "call_limit_reached_forcing_transfer",
+                turn_count=self._turn_count,
+                elapsed_seconds=(datetime.now(UTC) - self._call_started_at).total_seconds(),
+            )
+            return AgentReply(
+                text=_CALL_LIMIT_MESSAGE, intent=Intent.HUMAN_TRANSFER, transfer_to_human=True
+            )
+        self._turn_count += 1
+
         turn_start = len(self._history)
         self._history.append(LLMMessage(role=LLMMessageRole.USER, content=caller_text))
 
@@ -94,6 +128,7 @@ class ConversationManager:
                 )
             except LLMProviderError as exc:
                 log.error("llm_generate_failed_falling_back_to_human", error=str(exc))
+                metrics.llm_errors_total.inc()
                 self._history = self._history[:turn_start]  # drop this whole unanswered turn
                 return AgentReply(
                     text=_FALLBACK_MESSAGE, intent=Intent.GENERAL, transfer_to_human=True
@@ -139,14 +174,33 @@ class ConversationManager:
         self._history = self._history[:turn_start]
         return AgentReply(text=_FALLBACK_MESSAGE, intent=Intent.GENERAL, transfer_to_human=True)
 
+    def _call_limit_reached(self) -> bool:
+        if (
+            self._max_conversation_turns is not None
+            and self._turn_count >= self._max_conversation_turns
+        ):
+            return True
+        if self._max_call_duration_seconds is not None:
+            elapsed = (datetime.now(UTC) - self._call_started_at).total_seconds()
+            if elapsed >= self._max_call_duration_seconds:
+                return True
+        return False
+
     async def _execute_tool(self, tool_call: ToolCall) -> tuple[str, bool]:
         if self._tool_executor is None:
-            return f"Tool '{tool_call.name}' is not available.", True
-        try:
-            return await self._tool_executor(tool_call)
-        except Exception as exc:  # a tool must never crash a live call
-            logger.error("tool_executor_raised", tool=tool_call.name, error=str(exc))
-            return "An internal error occurred while executing this action.", True
+            result_text, is_error = f"Tool '{tool_call.name}' is not available.", True
+        else:
+            try:
+                result_text, is_error = await self._tool_executor(tool_call)
+            except Exception as exc:  # a tool must never crash a live call
+                logger.error("tool_executor_raised", tool=tool_call.name, error=str(exc))
+                result_text = "An internal error occurred while executing this action."
+                is_error = True
+
+        metrics.tool_calls_total.labels(
+            tool=tool_call.name, outcome="error" if is_error else "success"
+        ).inc()
+        return result_text, is_error
 
     def _trim_history(self) -> None:
         """Keep at most `max_history_turns` full turns.
