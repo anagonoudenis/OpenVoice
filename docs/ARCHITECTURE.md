@@ -42,9 +42,11 @@ Incoming call (LiveKit SIP)
   -> stt_node batch-transcribes each utterance via the configured STT provider
   -> ConversationManager: history, LLM provider call (intent + reply +
      tool-calls in one structured response), tool-call loop when the
-     model requests a booking action
-  -> llm_node routes the reply back into the session
-  -> tts_node synthesizes the response via the configured TTS provider
+     model requests a booking action; streams the final reply's text
+     when no tool call is needed (handle_utterance_stream)
+  -> llm_node routes the reply back into the session, chunk by chunk when streamed
+  -> tts_node synthesizes each complete sentence as it arrives, not the
+     whole reply at once
   -> Streamed back over LiveKit; AgentSession owns barge-in/interruption handling
   -> On hangup: CallTranscript rows persisted, summarize_call dispatched via
      Celery (never inline — must not delay call teardown)

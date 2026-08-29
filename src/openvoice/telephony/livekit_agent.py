@@ -140,34 +140,62 @@ class OpenVoiceAgent(Agent):
     async def llm_node(
         self, chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
     ) -> AsyncIterable[llm.ChatChunk]:
-        """Route the latest caller message through `ConversationManager`."""
+        """Route the latest caller message through `ConversationManager`,
+        streaming its reply (see `ConversationManager.handle_utterance_stream`)
+        so `tts_node` below can start synthesizing speech before the whole
+        reply is ready.
+        """
         messages = chat_ctx.messages()
         user_messages = [m for m in messages if m.role == "user"]
         if not user_messages:
             return
 
         caller_text = user_messages[-1].text_content or ""
-        reply = await self._conversation.handle_utterance(caller_text)
+        chunk_id = f"openvoice-{len(messages)}"
+        async for delta in self._conversation.handle_utterance_stream(caller_text):
+            yield llm.ChatChunk(id=chunk_id, delta=llm.ChoiceDelta(role="assistant", content=delta))
 
-        if reply.transfer_to_human and self._on_transfer_to_human is not None:
+        reply = self._conversation.last_reply
+        if reply is not None and reply.transfer_to_human and self._on_transfer_to_human is not None:
             task: asyncio.Task[None] = asyncio.create_task(self._on_transfer_to_human())
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
-        yield llm.ChatChunk(
-            id=f"openvoice-{len(messages)}",
-            delta=llm.ChoiceDelta(role="assistant", content=reply.text),
-        )
-
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
-        """Join the (already-complete) reply text and synthesize it in one shot."""
-        full_text = "".join([chunk async for chunk in text])
-        if not full_text:
-            return
+        """Synthesize speech sentence-by-sentence as text streams in from
+        `llm_node`, instead of waiting for the whole reply.
 
-        async for pcm_chunk in self._tts_provider.synthesize(full_text, sample_rate=_SAMPLE_RATE):
+        Piper/ElevenLabs (like most TTS engines) need a full clause of
+        context for coherent prosody, so a sentence is the right unit to
+        stream at here, not literally per-token -- letting playback start
+        after the first sentence is ready is most of what streaming
+        `llm_node` buys on a live call; waiting for the *entire* reply
+        before synthesizing anything (the previous behavior) threw that
+        latency win away at the very next pipeline stage.
+        """
+        buffer = ""
+        async for chunk in text:
+            buffer += chunk
+            while (cut := _find_sentence_end(buffer)) is not None:
+                sentence, buffer = buffer[:cut], buffer[cut:]
+                # `cut` lands right after the punctuation mark, not past
+                # the whitespace that confirmed it -- strip it here so
+                # that leading space doesn't linger at the start of
+                # `buffer` (and thus the next sentence).
+                sentence = sentence.strip()
+                if not sentence:
+                    continue
+                async for frame in self._synthesize_to_frames(sentence):
+                    yield frame
+
+        if buffer.strip():
+            async for frame in self._synthesize_to_frames(buffer.strip()):
+                yield frame
+
+    async def _synthesize_to_frames(self, text: str) -> AsyncIterable[rtc.AudioFrame]:
+        async for pcm_chunk in self._tts_provider.synthesize(text, sample_rate=_SAMPLE_RATE):
             if len(pcm_chunk) % 2 != 0:
                 # PCM16 requires an even byte count; a stray trailing byte
                 # would otherwise crash AudioFrame construction and drop
@@ -184,3 +212,25 @@ class OpenVoiceAgent(Agent):
                 num_channels=_NUM_CHANNELS,
                 samples_per_channel=samples_per_channel,
             )
+
+
+def _find_sentence_end(buffer: str) -> int | None:
+    """Index just after the first complete sentence in `buffer`, or `None`
+    if there isn't one yet.
+
+    A sentence is considered complete at a '.', '!', '?', or newline that
+    is *followed* by whitespace -- deliberately requiring one character of
+    lookahead, not just a trailing punctuation mark, so a period that
+    might turn out to be part of "3.14" or an abbreviation followed
+    immediately by more text isn't mistaken for a sentence boundary
+    (imperfect -- "Dr. Smith" still splits after "Dr." -- but wrong in a
+    way that only costs a little prosody, never a dropped or garbled
+    word, which is the right tradeoff for real streaming here). Whatever
+    never finds a boundary is flushed once by the caller after the input
+    stream ends, so no text is ever lost, just synthesized without the
+    streaming benefit.
+    """
+    for i, char in enumerate(buffer):
+        if char in ".!?\n" and i + 1 < len(buffer) and buffer[i + 1] in " \n":
+            return i + 1
+    return None

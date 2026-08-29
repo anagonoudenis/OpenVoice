@@ -6,6 +6,58 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
 
 ## [Unreleased]
 
+### Added — Phase 1.3: streaming LLM → TTS
+
+The last big latency lever: previously `llm_node` awaited the *entire*
+reply before yielding anything, and `tts_node` joined *all* of that text
+before synthesizing a single audio chunk -- so a caller heard nothing at
+all until the whole reply had both finished generating and finished
+being spoken to the TTS engine, even though LiveKit's own pipeline was
+built to stream both stages.
+
+- **`BaseLLMProvider.generate_stream()`**: a new abstract method yielding
+  incremental text deltas, implemented natively against both providers'
+  real streaming APIs (Anthropic's `messages.stream()`/`text_stream`,
+  OpenAI-compatible's `stream=True` chunks). Deliberately has no `tools`
+  parameter -- reassembling incrementally fragmented tool-call deltas
+  across both wire formats is real, separate complexity this doesn't
+  take on; `ConversationManager` only streams a turn it already knows
+  won't request a tool. Retries the connection-establishing step only,
+  never mid-stream (some text may already be reaching the caller and
+  being spoken by the time a later chunk fails, so silently restarting
+  would risk duplicated or out-of-order speech).
+- **The structured-reply format changed from JSON to a trailing plain-text
+  marker** (`<reply>\n###INTENT: <label>`, see
+  `openvoice.agent.structured_reply`): JSON doesn't stream safely --
+  TTS can only speak text known to be final, and a streamed JSON string
+  value needs unescaping that isn't safe to do on an arbitrary partial
+  suffix. A trailing marker sidesteps that: every character read before
+  it is exactly what should be spoken, no decoding step. This also
+  simplified the non-streaming parser (no more JSON-repair fallback
+  logic needed).
+- **`StreamingReplyExtractor`**: incrementally extracts speakable text
+  from a stream of deltas without ever emitting a prefix of the marker
+  itself, since a provider's chunk boundaries have no relationship to
+  where the marker falls in the text. Its own test suite tries *every*
+  possible split point of a known response, which caught a real bug
+  before it shipped: if the marker landed exactly at a delta boundary,
+  the intent label arriving in the next delta was silently discarded
+  instead of accumulated, always falling back to `Intent.GENERAL`.
+- **`ConversationManager.handle_utterance_stream`**: the streaming
+  counterpart to `handle_utterance`, used by `OpenVoiceAgent.llm_node`.
+  Only actually streams when no tools are configured for the
+  conversation; falls back to calling `handle_utterance` and yielding
+  its result as one chunk otherwise, so callers can use it
+  unconditionally and get real streaming exactly when it's safe to.
+- **`OpenVoiceAgent.tts_node` now synthesizes sentence-by-sentence** as
+  text arrives from `llm_node`, instead of buffering the whole reply
+  first -- sentence, not token, because Piper/ElevenLabs (like most TTS
+  engines) need a full clause of context for coherent prosody. The
+  sentence-boundary heuristic intentionally trades a little prosody for
+  simplicity and safety (e.g. "Dr. Smith" still splits after "Dr.") but
+  never drops or garbles text -- anything left over once the input
+  stream ends is flushed as a final sentence.
+
 ### Added — Phase 1.2: production-reliability hardening
 
 Found by a full-project audit specifically looking for what could go

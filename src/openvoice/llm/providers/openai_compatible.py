@@ -10,7 +10,7 @@ whether an API key is required differ, all plain constructor parameters.
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import openai
@@ -120,6 +120,55 @@ class OpenAICompatibleLLMProvider(BaseLLMProvider):
             output_tokens=usage.completion_tokens if usage is not None else None,
             tool_calls=_parse_tool_calls(choice.message.tool_calls),
         )
+
+    async def generate_stream(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> AsyncIterator[str]:
+        openai_messages: list[dict[str, Any]] = []
+        if system_prompt is not None:
+            openai_messages.append({"role": "system", "content": system_prompt})
+        openai_messages.extend(_to_openai_messages(messages))
+
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "messages": openai_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        async def _call() -> openai.AsyncStream[openai.types.chat.ChatCompletionChunk]:
+            return await self._client.chat.completions.create(**kwargs)  # type: ignore[no-any-return]
+
+        try:
+            # Only the connection-establishing call is retried (same
+            # closure-wrapping-a-plain-function reasoning as `generate()`
+            # above) -- never the token iteration after it: some text may
+            # already have reached the caller (and been spoken) by the
+            # time a later chunk fails, so silently restarting mid-stream
+            # risks duplicated or out-of-order speech.
+            stream: openai.AsyncStream[openai.types.chat.ChatCompletionChunk] = await self._retryer(
+                _call
+            )
+        except openai.APIError as exc:
+            logger.error("openai_stream_connect_failed", error=str(exc), model=self._model)
+            raise LLMProviderError(f"OpenAI-compatible streaming call failed: {exc}") from exc
+
+        try:
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except openai.APIError as exc:
+            logger.error("openai_stream_failed", error=str(exc), model=self._model)
+            raise LLMProviderError(f"OpenAI-compatible streaming call failed: {exc}") from exc
 
 
 def _to_openai_messages(messages: Sequence[LLMMessage]) -> list[dict[str, Any]]:

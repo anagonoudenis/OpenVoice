@@ -113,6 +113,21 @@ two remaining "known gaps" above.
   general analytics layer, just enough to know something broke without
   waiting for a customer to complain.
 
+## Phase 1.3 — Streaming LLM → TTS (complete)
+
+The last big latency lever from the original improvement plan: replies
+used to be generated and synthesized in one shot each -- a caller heard
+nothing until the *entire* reply had both finished generating and
+finished being spoken to the TTS engine. `BaseLLMProvider.generate_stream()`
+(native streaming against both providers' real APIs), a new trailing-marker
+reply format that streams safely (replacing the JSON envelope, which
+doesn't), and sentence-by-sentence TTS synthesis now let the agent start
+speaking as soon as the first sentence is ready. Tool-calling turns are
+unaffected -- they still use the non-streaming path, since a tool call's
+arguments must be fully received before they can be executed. See
+CHANGELOG for the full breakdown, including a real bug the streaming
+extractor's own exhaustive boundary test caught before it shipped.
+
 ## Phase 2 — Post-MVP
 
 Documented here, not built until Phase 1 is stable and merged:

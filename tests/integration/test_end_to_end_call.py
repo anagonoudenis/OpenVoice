@@ -34,7 +34,7 @@ async def _frames(chunk: bytes = b"\x00\x01") -> AsyncIterator[bytes]:
 
 
 def _structured(intent: str, reply: str) -> str:
-    return f'{{"intent": "{intent}", "reply": "{reply}"}}'
+    return f"{reply}\n###INTENT: {intent}"
 
 
 async def test_full_call_lifecycle_intake_to_summary(db_session: AsyncSession) -> None:

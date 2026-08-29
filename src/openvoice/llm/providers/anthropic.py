@@ -1,10 +1,11 @@
 """Anthropic Claude LLM provider."""
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import anthropic
 import structlog
+from anthropic.lib.streaming import AsyncMessageStream
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from openvoice.llm.base import (
@@ -103,6 +104,52 @@ class AnthropicLLMProvider(BaseLLMProvider):
             output_tokens=response.usage.output_tokens,
             tool_calls=tool_calls or None,
         )
+
+    async def generate_stream(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> AsyncIterator[str]:
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": _to_anthropic_messages(messages),
+        }
+        if system_prompt is not None:
+            kwargs["system"] = system_prompt
+
+        # `.messages.stream(...)` itself makes no network call -- it just
+        # builds a context-manager object; the request happens on
+        # `__aenter__`. Retrying is done by hand here (rather than via
+        # `self._retryer` on a whole `async with` block) specifically so
+        # only *that* connection-establishing step is retried, never the
+        # token iteration after it: some text may already have reached
+        # the caller (and been spoken) by the time a later chunk fails,
+        # so silently restarting mid-stream risks duplicated or
+        # out-of-order speech.
+        stream_manager = self._client.messages.stream(**kwargs)
+
+        async def _enter() -> AsyncMessageStream[Any]:
+            return await stream_manager.__aenter__()
+
+        try:
+            stream: AsyncMessageStream[Any] = await self._retryer(_enter)
+        except anthropic.APIError as exc:
+            logger.error("anthropic_stream_connect_failed", error=str(exc), model=self._model)
+            raise LLMProviderError(f"Anthropic streaming call failed: {exc}") from exc
+
+        try:
+            async for text in stream.text_stream:
+                yield text
+        except anthropic.APIError as exc:
+            logger.error("anthropic_stream_failed", error=str(exc), model=self._model)
+            raise LLMProviderError(f"Anthropic streaming call failed: {exc}") from exc
+        finally:
+            await stream_manager.__aexit__(None, None, None)
 
 
 def _to_anthropic_messages(messages: Sequence[LLMMessage]) -> list[dict[str, Any]]:

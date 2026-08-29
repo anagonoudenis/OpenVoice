@@ -134,9 +134,7 @@ async def test_stt_node_ignores_non_end_of_speech_events() -> None:
 
 
 async def test_llm_node_routes_last_user_message_through_conversation() -> None:
-    llm_provider = FakeLLMProvider(
-        responses=['{"intent": "general", "reply": "We\'re open 9 to 5."}']
-    )
+    llm_provider = FakeLLMProvider(responses=["We're open 9 to 5.\n###INTENT: general"])
     agent = _agent(
         stt_provider=FakeSTTProvider([]), tts_provider=FakeTTSProvider(), llm_provider=llm_provider
     )
@@ -148,6 +146,23 @@ async def test_llm_node_routes_last_user_message_through_conversation() -> None:
     assert len(chunks) == 1
     assert chunks[0].delta is not None
     assert chunks[0].delta.content == "We're open 9 to 5."
+
+
+async def test_llm_node_streams_multiple_chat_chunks() -> None:
+    llm_provider = FakeLLMProvider(
+        responses=["We're open 9 to 5.\n###INTENT: general"], stream_chunk_size=5
+    )
+    agent = _agent(
+        stt_provider=FakeSTTProvider([]), tts_provider=FakeTTSProvider(), llm_provider=llm_provider
+    )
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="What are your hours?")
+
+    chunks = [c async for c in agent.llm_node(chat_ctx, tools=[], model_settings=ModelSettings())]
+
+    assert len(chunks) > 1  # actually streamed, not delivered as one chunk
+    joined = "".join(c.delta.content or "" for c in chunks if c.delta is not None)
+    assert joined.rstrip() == "We're open 9 to 5."
 
 
 async def test_llm_node_yields_nothing_without_a_user_message() -> None:
@@ -199,6 +214,77 @@ async def test_tts_node_truncates_odd_length_pcm_chunk() -> None:
     assert len(frames) == 1
     assert bytes(frames[0].data) == b"audio:H"[:-1]
     assert frames[0].samples_per_channel == 3
+
+
+async def test_tts_node_synthesizes_each_complete_sentence_as_it_arrives() -> None:
+    """The whole point of streaming `llm_node` is wasted if `tts_node`
+    still waits for the entire reply before synthesizing anything -- this
+    proves each sentence is sent to the TTS provider as soon as it's
+    complete, not all at once at the end.
+    """
+    tts_provider = FakeTTSProvider()
+    agent = _agent(
+        stt_provider=FakeSTTProvider([]), tts_provider=tts_provider, llm_provider=FakeLLMProvider()
+    )
+
+    async def text_stream() -> AsyncIterable[str]:
+        yield "First sentence. "
+        yield "Second sentence."
+
+    frames = [f async for f in agent.tts_node(text_stream(), model_settings=ModelSettings())]
+
+    assert tts_provider.synthesized_text == ["First sentence.", "Second sentence."]
+    assert len(frames) == 2
+
+
+async def test_tts_node_splits_sentences_arriving_within_one_delta() -> None:
+    tts_provider = FakeTTSProvider()
+    agent = _agent(
+        stt_provider=FakeSTTProvider([]), tts_provider=tts_provider, llm_provider=FakeLLMProvider()
+    )
+
+    async def text_stream() -> AsyncIterable[str]:
+        yield "How can I help? Sure, one moment. All set!"
+
+    _frames = [f async for f in agent.tts_node(text_stream(), model_settings=ModelSettings())]
+
+    assert tts_provider.synthesized_text == [
+        "How can I help?",
+        "Sure, one moment.",
+        "All set!",
+    ]
+
+
+async def test_tts_node_flushes_trailing_sentence_with_no_terminal_punctuation() -> None:
+    tts_provider = FakeTTSProvider()
+    agent = _agent(
+        stt_provider=FakeSTTProvider([]), tts_provider=tts_provider, llm_provider=FakeLLMProvider()
+    )
+
+    async def text_stream() -> AsyncIterable[str]:
+        yield "Done. "
+        yield "and one more thing with no period at the end"
+
+    _frames = [f async for f in agent.tts_node(text_stream(), model_settings=ModelSettings())]
+
+    assert tts_provider.synthesized_text == [
+        "Done.",
+        "and one more thing with no period at the end",
+    ]
+
+
+async def test_tts_node_does_not_split_on_a_decimal_point() -> None:
+    tts_provider = FakeTTSProvider()
+    agent = _agent(
+        stt_provider=FakeSTTProvider([]), tts_provider=tts_provider, llm_provider=FakeLLMProvider()
+    )
+
+    async def text_stream() -> AsyncIterable[str]:
+        yield "That will be $3.50 total."
+
+    _frames = [f async for f in agent.tts_node(text_stream(), model_settings=ModelSettings())]
+
+    assert tts_provider.synthesized_text == ["That will be $3.50 total."]
 
 
 async def test_tts_node_yields_nothing_for_empty_text() -> None:

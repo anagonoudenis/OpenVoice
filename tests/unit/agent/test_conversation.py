@@ -24,7 +24,7 @@ def _manager(llm: FakeLLMProvider, *, max_history_turns: int = 20) -> Conversati
 
 
 def _structured(intent: str, reply: str) -> str:
-    return f'{{"intent": "{intent}", "reply": "{reply}"}}'
+    return f"{reply}\n###INTENT: {intent}"
 
 
 async def test_handle_utterance_returns_llm_reply_and_updates_history() -> None:
@@ -97,7 +97,7 @@ async def test_llm_generate_is_called_with_the_structured_system_prompt() -> Non
     [system_prompt] = llm.system_prompts
     assert system_prompt is not None
     assert system_prompt.startswith("You are a helpful agent.")
-    assert '"intent"' in system_prompt
+    assert "###INTENT:" in system_prompt
 
 
 def test_constructor_rejects_tools_without_executor() -> None:
@@ -311,3 +311,130 @@ async def test_no_call_limits_by_default() -> None:
         llm.responses.append(_structured("general", f"reply {i}"))
         reply = await manager.handle_utterance(f"utterance {i}")
         assert reply.transfer_to_human is False
+
+
+class TestHandleUtteranceStream:
+    async def test_yields_reply_text_incrementally_and_sets_last_reply(self) -> None:
+        llm = FakeLLMProvider(
+            responses=[_structured("general", "Sure, I can help with that today.")],
+            stream_chunk_size=5,
+        )
+        manager = _manager(llm)
+
+        chunks = [c async for c in manager.handle_utterance_stream("What are your hours?")]
+        joined = "".join(chunks)
+
+        assert len(chunks) > 1  # actually streamed in multiple pieces, not one shot
+        # A trailing whitespace character right before the marker may or
+        # may not already have streamed by the time the marker itself is
+        # found -- an inherent, harmless ambiguity (see
+        # StreamingReplyExtractor's docstring/tests) -- so normalized here.
+        assert joined.rstrip() == "Sure, I can help with that today."
+        assert "###INTENT" not in joined
+        assert manager.last_reply is not None
+        assert manager.last_reply.text == joined  # exactly what was streamed, nothing more/less
+        assert manager.last_reply.intent is Intent.GENERAL
+        assert manager.last_reply.transfer_to_human is False
+
+    async def test_streamed_reply_is_recorded_in_history(self) -> None:
+        llm = FakeLLMProvider(responses=[_structured("general", "Noted.")], stream_chunk_size=2)
+        manager = _manager(llm)
+
+        async for _ in manager.handle_utterance_stream("Hello"):
+            pass
+
+        # A trailing whitespace character right before the marker may or
+        # may not already have been released by the time the marker is
+        # found, depending on exactly where chunk boundaries fall -- an
+        # inherent, harmless streaming ambiguity (see
+        # StreamingReplyExtractor's docstring/tests), so normalized here
+        # rather than asserted on exactly.
+        assert manager.history[0].content == "Hello"
+        assert manager.history[1].content.strip() == "Noted."
+
+    async def test_human_transfer_intent_streams_correctly(self) -> None:
+        llm = FakeLLMProvider(
+            responses=[_structured("human_transfer", "Of course, let me transfer you.")],
+            stream_chunk_size=3,
+        )
+        manager = _manager(llm)
+
+        chunks = [c async for c in manager.handle_utterance_stream("get me a person")]
+
+        assert "".join(chunks) == "Of course, let me transfer you."
+        assert manager.last_reply is not None
+        assert manager.last_reply.transfer_to_human is True
+        assert manager.last_reply.intent is Intent.HUMAN_TRANSFER
+
+    async def test_llm_stream_failure_falls_back_to_human_and_drops_turn(self) -> None:
+        llm = FakeLLMProvider(fail=True)
+        manager = _manager(llm)
+
+        chunks = [c async for c in manager.handle_utterance_stream("Help me")]
+
+        assert "".join(chunks) == manager.last_reply.text  # type: ignore[union-attr]
+        assert manager.last_reply is not None
+        assert manager.last_reply.transfer_to_human is True
+        assert "trouble" in manager.last_reply.text
+        assert manager.history == []
+
+    async def test_call_limit_reached_yields_message_without_calling_llm(self) -> None:
+        llm = FakeLLMProvider(responses=[_structured("general", "reply")])
+        manager = ConversationManager(
+            llm=llm, system_prompt="You are helpful.", call_id="call-1", max_conversation_turns=0
+        )
+
+        chunks = [c async for c in manager.handle_utterance_stream("hello")]
+
+        assert "".join(chunks) == manager.last_reply.text  # type: ignore[union-attr]
+        assert manager.last_reply is not None
+        assert manager.last_reply.transfer_to_human is True
+        assert len(llm.stream_calls) == 0
+        assert len(llm.calls) == 0
+
+    async def test_falls_back_to_non_streaming_handle_utterance_when_tools_configured(
+        self,
+    ) -> None:
+        llm = FakeLLMProvider(responses=[_structured("general", "Booked.")])
+
+        async def executor(_call: ToolCall) -> tuple[str, bool]:
+            return "unused", False
+
+        manager = ConversationManager(
+            llm=llm,
+            system_prompt="You are helpful.",
+            call_id="call-1",
+            tools=[_ECHO_TOOL],
+            tool_executor=executor,
+        )
+
+        chunks = [c async for c in manager.handle_utterance_stream("book me a slot")]
+
+        # No tool call requested this turn, so the underlying non-streaming
+        # generate() path is used and its single complete reply is yielded
+        # as one chunk -- generate_stream() must never be called.
+        assert chunks == ["Booked."]
+        assert llm.stream_calls == []
+        assert manager.last_reply is not None
+        assert manager.last_reply.text == "Booked."
+
+    async def test_marker_split_one_character_at_a_time_still_parses_intent(self) -> None:
+        """End-to-end regression test (the extractor itself has an
+        exhaustive per-boundary test in test_structured_reply.py) for a
+        real bug: the marker landing at the very edge of a streamed delta
+        used to silently lose the intent label. Worst-case fragmentation
+        here to exercise every possible split through the real
+        ConversationManager -> generate_stream -> extractor path.
+        """
+        llm = FakeLLMProvider(
+            responses=[_structured("booking", "Let's do that.")], stream_chunk_size=1
+        )
+        manager = _manager(llm)
+
+        chunks = [c async for c in manager.handle_utterance_stream("book me a slot")]
+
+        # See TestHandleUtteranceStream.test_streamed_reply_is_recorded_in_history
+        # re: trailing-whitespace normalization.
+        assert "".join(chunks).rstrip() == "Let's do that."
+        assert manager.last_reply is not None
+        assert manager.last_reply.intent is Intent.BOOKING

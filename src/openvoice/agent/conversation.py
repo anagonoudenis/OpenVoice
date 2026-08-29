@@ -1,13 +1,17 @@
 """Per-call conversation orchestration: history, LLM turn-taking, tool-calling, fallback."""
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 
 import structlog
 
 from openvoice import metrics
 from openvoice.agent.base import AgentReply, Intent
-from openvoice.agent.structured_reply import build_structured_system_prompt, parse_structured_reply
+from openvoice.agent.structured_reply import (
+    StreamingReplyExtractor,
+    build_structured_system_prompt,
+    parse_structured_reply,
+)
 from openvoice.agent.tools.base import ToolExecutor
 from openvoice.llm.base import (
     BaseLLMProvider,
@@ -65,6 +69,11 @@ class ConversationManager:
     no transfer number is configured) instead of generating another
     reply -- checked *before* calling the LLM, so hitting the cap costs
     nothing further.
+
+    `handle_utterance_stream` is the streaming counterpart used by
+    `OpenVoiceAgent.llm_node`/`tts_node` for a live call, yielding the
+    reply's text as it's generated instead of all at once -- see its own
+    docstring for what does and doesn't stream and why.
     """
 
     def __init__(
@@ -96,6 +105,9 @@ class ConversationManager:
         self._call_started_at = call_started_at or datetime.now(UTC)
         self._turn_count = 0
         self._history: list[LLMMessage] = []
+        # Set by `handle_utterance_stream` once its generator is fully
+        # consumed -- read only after that, never during iteration.
+        self.last_reply: AgentReply | None = None
 
     @property
     def history(self) -> list[LLMMessage]:
@@ -173,6 +185,82 @@ class ConversationManager:
         log.error("tool_loop_exceeded_max_iterations", max_iterations=self._max_tool_iterations)
         self._history = self._history[:turn_start]
         return AgentReply(text=_FALLBACK_MESSAGE, intent=Intent.GENERAL, transfer_to_human=True)
+
+    async def handle_utterance_stream(self, caller_text: str) -> AsyncIterator[str]:
+        """Like `handle_utterance`, but streams the reply's text as it
+        arrives from the model when possible, letting the caller (see
+        `OpenVoiceAgent.tts_node`) start synthesizing speech before the
+        whole reply is ready -- the single biggest lever on how
+        responsive the agent feels on a live call.
+
+        Only streams when no tools are configured for this conversation:
+        a tool call's arguments must be fully received before they can be
+        executed, and correctly reassembling streamed, incrementally
+        fragmented tool-call deltas across both provider wire formats is
+        real, separate complexity this doesn't take on. When tools are
+        configured, this just calls `handle_utterance` and yields its
+        result as one chunk -- callers can use this method
+        unconditionally and get real streaming exactly when it's safe to.
+
+        Sets `self.last_reply` to the same `AgentReply` `handle_utterance`
+        would have returned, once the generator is fully consumed -- read
+        it only after that, never during iteration.
+        """
+        if self._tools is not None:
+            self.last_reply = await self.handle_utterance(caller_text)
+            if self.last_reply.text:
+                yield self.last_reply.text
+            return
+
+        log = logger.bind(call_id=self._call_id)
+        log.info("utterance_received", text=caller_text)
+
+        if self._call_limit_reached():
+            log.warning(
+                "call_limit_reached_forcing_transfer",
+                turn_count=self._turn_count,
+                elapsed_seconds=(datetime.now(UTC) - self._call_started_at).total_seconds(),
+            )
+            self.last_reply = AgentReply(
+                text=_CALL_LIMIT_MESSAGE, intent=Intent.HUMAN_TRANSFER, transfer_to_human=True
+            )
+            yield _CALL_LIMIT_MESSAGE
+            return
+        self._turn_count += 1
+
+        turn_start = len(self._history)
+        self._history.append(LLMMessage(role=LLMMessageRole.USER, content=caller_text))
+
+        extractor = StreamingReplyExtractor()
+        try:
+            async for delta in self._llm.generate_stream(
+                self._history, system_prompt=self._system_prompt
+            ):
+                speakable = extractor.feed(delta)
+                if speakable:
+                    yield speakable
+        except LLMProviderError as exc:
+            log.error("llm_generate_stream_failed_falling_back_to_human", error=str(exc))
+            metrics.llm_errors_total.inc()
+            self._history = self._history[:turn_start]  # drop this whole unanswered turn
+            self.last_reply = AgentReply(
+                text=_FALLBACK_MESSAGE, intent=Intent.GENERAL, transfer_to_human=True
+            )
+            yield _FALLBACK_MESSAGE
+            return
+
+        reply_text, trailing, intent = extractor.finalize()
+        if trailing:
+            yield trailing
+        log.info("intent_detected", intent=intent.value)
+
+        self._history.append(LLMMessage(role=LLMMessageRole.ASSISTANT, content=reply_text))
+        self._trim_history()
+        log.info("reply_generated", text=reply_text)
+
+        self.last_reply = AgentReply(
+            text=reply_text, intent=intent, transfer_to_human=intent in _TRANSFER_INTENTS
+        )
 
     def _call_limit_reached(self) -> bool:
         if (

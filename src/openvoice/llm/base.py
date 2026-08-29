@@ -7,7 +7,7 @@ concrete implementation is selected from configuration.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -109,5 +109,33 @@ class BaseLLMProvider(ABC):
         given and the model chooses to use one, the returned
         `LLMResponse.tool_calls` is non-empty and `content` may be empty
         -- callers must not treat it as a final reply in that case.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def generate_stream(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> AsyncIterator[str]:
+        """Stream a completion as incremental text deltas.
+
+        No `tools` parameter, deliberately: a tool call's arguments must
+        be fully received before they can be executed, and reassembling
+        incrementally fragmented tool-call deltas is real, separate
+        complexity this codebase doesn't take on -- `ConversationManager`
+        only calls this for a turn it already knows won't request a tool
+        (see `ConversationManager.handle_utterance_stream`).
+
+        Implementations must retry the initial connection with the same
+        policy as `generate()`, but must not retry once any text has
+        started streaming -- some of it may already be reaching the
+        caller (and being spoken), so silently restarting mid-stream
+        would risk duplicated or out-of-order speech. A failure once
+        streaming has begun should simply propagate as
+        `LLMProviderError` from the generator.
         """
         raise NotImplementedError

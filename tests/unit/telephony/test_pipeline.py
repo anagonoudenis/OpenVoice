@@ -19,7 +19,7 @@ def _pipeline(*, stt: FakeSTTProvider, tts: FakeTTSProvider, llm: FakeLLMProvide
 
 
 def _structured(intent: str, reply: str) -> str:
-    return f'{{"intent": "{intent}", "reply": "{reply}"}}'
+    return f"{reply}\n###INTENT: {intent}"
 
 
 async def test_handle_utterance_audio_runs_full_loop() -> None:
