@@ -127,9 +127,25 @@ class OpenVoiceAgent(Agent):
                 # Passing the wrong value here silently made Whisper hear
                 # the caller's speech sped up or slowed down, which reads
                 # as empty or garbled transcripts, not an obvious error.
+                utterance_sample_rate = event.frames[0].sample_rate
+                total_samples = sum(f.samples_per_channel for f in event.frames)
+                logger.info(
+                    "stt_utterance_captured",
+                    sample_rate=utterance_sample_rate,
+                    num_frames=len(event.frames),
+                    duration_seconds=round(total_samples / utterance_sample_rate, 3)
+                    if utterance_sample_rate
+                    else None,
+                )
                 async for segment in self._stt_provider.transcribe_stream(
-                    _utterance_frames(), sample_rate=event.frames[0].sample_rate
+                    _utterance_frames(), sample_rate=utterance_sample_rate
                 ):
+                    logger.info(
+                        "stt_segment_transcribed",
+                        text=segment.text,
+                        is_final=segment.is_final,
+                        language=segment.language,
+                    )
                     if segment.is_final and segment.text:
                         yield stt.SpeechEvent(
                             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
@@ -158,6 +174,7 @@ class OpenVoiceAgent(Agent):
             return
 
         caller_text = user_messages[-1].text_content or ""
+        logger.info("llm_node_caller_text", caller_text=caller_text, num_messages=len(messages))
         chunk_id = f"openvoice-{len(messages)}"
         async for delta in self._conversation.handle_utterance_stream(caller_text):
             yield llm.ChatChunk(id=chunk_id, delta=llm.ChoiceDelta(role="assistant", content=delta))
