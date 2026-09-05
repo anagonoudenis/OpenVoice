@@ -50,9 +50,9 @@ class _FakeVAD:
         return _FakeVADStream(self._events)
 
 
-def _frame(pcm: bytes) -> rtc.AudioFrame:
+def _frame(pcm: bytes, *, sample_rate: int = 16000) -> rtc.AudioFrame:
     return rtc.AudioFrame(
-        data=pcm, sample_rate=16000, num_channels=1, samples_per_channel=len(pcm) // 2
+        data=pcm, sample_rate=sample_rate, num_channels=1, samples_per_channel=len(pcm) // 2
     )
 
 
@@ -106,6 +106,37 @@ async def test_stt_node_emits_final_transcript_for_vad_segmented_utterance() -> 
     assert isinstance(events[0], stt.SpeechEvent)
     assert events[0].type is stt.SpeechEventType.FINAL_TRANSCRIPT
     assert events[0].alternatives[0].text == "hello there"
+
+
+async def test_stt_node_passes_the_frames_actual_sample_rate_not_a_hardcoded_one() -> None:
+    """Regression test: `stt_node` used to always pass the hardcoded
+    16 kHz constant to the STT provider regardless of what rate the
+    captured audio frame actually claimed -- silently making Whisper
+    misinterpret audio captured at any other rate as sped up or slowed
+    down, which reads as empty/garbled transcripts, not an obvious
+    error. The frame's own `.sample_rate` is the actual capture rate and
+    must be what's passed through.
+    """
+    frame = _frame(b"\x00\x01" * 160, sample_rate=48000)
+    event = vad.VADEvent(
+        type=vad.VADEventType.END_OF_SPEECH,
+        samples_index=0,
+        timestamp=0.0,
+        speech_duration=1.0,
+        silence_duration=0.0,
+        frames=[frame],
+    )
+    stt_provider = FakeSTTProvider([TranscriptSegment(text="hello", is_final=True)])
+    agent = _agent(
+        stt_provider=stt_provider,
+        tts_provider=FakeTTSProvider(),
+        llm_provider=FakeLLMProvider(),
+        vad_events=[event],
+    )
+
+    [e async for e in agent.stt_node(_audio_stream([frame]), model_settings=ModelSettings())]
+
+    assert stt_provider.received_sample_rates == [48000]
 
 
 async def test_stt_node_ignores_non_end_of_speech_events() -> None:

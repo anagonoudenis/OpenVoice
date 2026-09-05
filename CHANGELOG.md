@@ -8,6 +8,27 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
 
 ### Fixed
 
+- **`transcribe_stream`'s `sample_rate` argument was accepted and never
+  used.** Whisper's models are trained specifically on 16 kHz audio --
+  feeding them audio actually captured at a different rate doesn't
+  error, it just makes Whisper "hear" it sped up or slowed down (a
+  caller's speech captured at 48 kHz but treated as 16 kHz plays back 3x
+  too fast), which reads as empty or garbled transcripts, not an obvious
+  failure. Two bugs compounded this: `FasterWhisperSTTProvider
+  .transcribe_stream` never resampled to the rate Whisper actually
+  expects, and `OpenVoiceAgent.stt_node` passed a hardcoded 16 kHz
+  constant to it regardless of what the captured `rtc.AudioFrame`s
+  actually claimed as their own `sample_rate`. Caught by a real call
+  where VAD/turn-detection clearly fired (the caller's speech was
+  detected) but transcripts kept coming back empty -- which the LLM then
+  correctly interpreted as "I can't hear you", always in English, since
+  there was never any real caller text to detect a language from (not a
+  language-detection bug, despite reading exactly like one). Fixed by
+  actually resampling in `transcribe_stream` (reusing the same PCM16
+  linear-resampler `tts.providers.piper` already had, now shared via new
+  `openvoice.audio`) and by reading each frame's real `.sample_rate` in
+  `stt_node` instead of assuming a constant.
+
 - **`FasterWhisperSTTProvider` ran the actual transcription on the event
   loop, not in the background thread it was supposedly isolated to.**
   `faster-whisper`'s `model.transcribe()` returns almost instantly with a

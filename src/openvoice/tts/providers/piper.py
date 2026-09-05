@@ -31,9 +31,9 @@ import asyncio
 from collections.abc import AsyncIterator, Iterable
 from typing import Protocol
 
-import numpy as np
 import structlog
 
+from openvoice.audio import resample_pcm16
 from openvoice.config import Settings
 from openvoice.tts.base import BaseTTSProvider, TTSError
 
@@ -57,21 +57,6 @@ class _PiperVoice(Protocol):
     def config(self) -> _PiperVoiceConfig: ...
 
     def synthesize(self, text: str) -> Iterable[_PiperAudioChunk]: ...
-
-
-def _resample_pcm16(pcm: bytes, *, from_rate: int, to_rate: int) -> bytes:
-    """Linearly resample mono PCM16 `pcm` from `from_rate` to `to_rate`."""
-    if from_rate == to_rate or not pcm:
-        return pcm
-
-    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
-    target_count = max(1, round(samples.size * to_rate / from_rate))
-    resampled = np.interp(
-        np.linspace(0, samples.size - 1, target_count),
-        np.arange(samples.size),
-        samples,
-    )
-    return resampled.astype(np.int16).tobytes()
 
 
 class PiperTTSProvider(BaseTTSProvider):
@@ -102,6 +87,6 @@ class PiperTTSProvider(BaseTTSProvider):
 
         native_rate = self._voice.config.sample_rate
         for chunk in chunks:
-            yield _resample_pcm16(
+            yield resample_pcm16(
                 chunk.audio_int16_bytes, from_rate=native_rate, to_rate=sample_rate
             )

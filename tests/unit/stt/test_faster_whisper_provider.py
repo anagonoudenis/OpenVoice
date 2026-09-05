@@ -100,6 +100,38 @@ async def test_transcribe_generator_is_consumed_off_the_event_loop() -> None:
     assert all(tid != main_thread_id for tid in consuming_thread_ids)
 
 
+async def test_transcribe_stream_resamples_non_16khz_audio_to_what_whisper_expects() -> None:
+    """Regression test: Whisper's models are trained specifically on
+    16 kHz audio -- feeding them audio actually captured at a different
+    rate without resampling first doesn't error, it just makes Whisper
+    "hear" it sped up or slowed down (silently misinterpreted, not an
+    obvious failure). `sample_rate` used to be accepted and never used at
+    all -- caught by a real call where speech was clearly detected but
+    transcripts kept coming back empty.
+    """
+    model = _FakeModel(["ok"])
+    provider = FasterWhisperSTTProvider(model=model)
+    # 4800 samples at 48kHz is 100ms; at Whisper's expected 16kHz that's
+    # 1600 samples.
+    pcm = np.zeros(4800, dtype=np.int16).tobytes()
+
+    [seg async for seg in provider.transcribe_stream(_frames([pcm]), sample_rate=48000)]
+
+    assert model.received_audio is not None
+    assert 1590 <= model.received_audio.size <= 1610
+
+
+async def test_transcribe_stream_does_not_resample_when_already_16khz() -> None:
+    model = _FakeModel(["ok"])
+    provider = FasterWhisperSTTProvider(model=model)
+    pcm = np.array([0, 1000, -1000], dtype=np.int16).tobytes()
+
+    [seg async for seg in provider.transcribe_stream(_frames([pcm]), sample_rate=16000)]
+
+    assert model.received_audio is not None
+    assert model.received_audio.size == 3
+
+
 async def test_transcribe_stream_wraps_backend_errors() -> None:
     model = _FakeModel([], fail=True)
     provider = FasterWhisperSTTProvider(model=model)

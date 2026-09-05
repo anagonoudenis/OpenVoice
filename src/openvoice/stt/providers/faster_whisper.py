@@ -16,12 +16,18 @@ iteration that consumes it are run inside the same `asyncio.to_thread`
 worker function (see `_transcribe` below) so none of that work runs on
 the event loop -- doing the iteration outside the thread call, which
 this module used to do, silently defeats the entire point of
-`asyncio.to_thread` and was caught by an actual live call going
-mysteriously quiet (empty transcripts) rather than merely slow, likely
-because ctranslate2's own execution engine has thread-affinity
-expectations `asyncio.to_thread`'s worker-thread reuse can violate when
-the generator is driven from a different thread than the one that
-created it.
+`asyncio.to_thread`.
+
+Whisper's models are trained specifically on 16 kHz audio -- feeding them
+audio actually captured at a different rate without resampling first
+doesn't error, it just makes Whisper "hear" the audio sped up or slowed
+down (a caller's utterance captured at 48 kHz but treated as 16 kHz
+plays back 3x too fast), which reads as empty or garbled transcripts,
+not an obvious failure. `transcribe_stream` used to accept a
+`sample_rate` argument and then never once use it, silently assuming the
+caller audio was always already 16 kHz -- caught by a real call where
+speech was clearly detected (VAD/turn-detection fired) but transcripts
+kept coming back empty.
 """
 
 import asyncio
@@ -31,10 +37,13 @@ from typing import Any, Protocol
 import numpy as np
 import structlog
 
+from openvoice.audio import resample_pcm16
 from openvoice.config import Settings
 from openvoice.stt.base import BaseSTTProvider, STTError, TranscriptSegment
 
 logger = structlog.get_logger(__name__)
+
+_WHISPER_SAMPLE_RATE = 16000
 
 
 class _Segment(Protocol):
@@ -77,6 +86,9 @@ class FasterWhisperSTTProvider(BaseSTTProvider):
         raw = b"".join([frame async for frame in audio_frames])
         if not raw:
             return
+
+        if sample_rate != _WHISPER_SAMPLE_RATE:
+            raw = resample_pcm16(raw, from_rate=sample_rate, to_rate=_WHISPER_SAMPLE_RATE)
 
         audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 

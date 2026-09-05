@@ -120,8 +120,15 @@ class OpenVoiceAgent(Agent):
                     for frame in frames:
                         yield bytes(frame.data)
 
+                # The frame's own `sample_rate` is the actual capture
+                # rate -- not necessarily `_SAMPLE_RATE` (16 kHz), which
+                # is only what *we* ask providers to speak/listen at, not
+                # a guarantee about what the mic/call audio arrives as.
+                # Passing the wrong value here silently made Whisper hear
+                # the caller's speech sped up or slowed down, which reads
+                # as empty or garbled transcripts, not an obvious error.
                 async for segment in self._stt_provider.transcribe_stream(
-                    _utterance_frames(), sample_rate=_SAMPLE_RATE
+                    _utterance_frames(), sample_rate=event.frames[0].sample_rate
                 ):
                     if segment.is_final and segment.text:
                         yield stt.SpeechEvent(

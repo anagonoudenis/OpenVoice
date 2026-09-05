@@ -11,10 +11,12 @@ class FakeSTTProvider(BaseSTTProvider):
 
     def __init__(self, segments: list[TranscriptSegment]) -> None:
         self._segments = segments
+        self.received_sample_rates: list[int] = []
 
     async def transcribe_stream(
         self, audio_frames: AsyncIterator[bytes], *, sample_rate: int = 16000
     ) -> AsyncIterator[TranscriptSegment]:
+        self.received_sample_rates.append(sample_rate)
         async for _ in audio_frames:
             pass
         for segment in self._segments:
