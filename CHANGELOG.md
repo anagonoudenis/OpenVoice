@@ -6,6 +6,30 @@ doesn't use semantic version tags yet (pre-1.0, Phase 1 MVP).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`FasterWhisperSTTProvider` ran the actual transcription on the event
+  loop, not in the background thread it was supposedly isolated to.**
+  `faster-whisper`'s `model.transcribe()` returns almost instantly with a
+  *lazy* generator -- the real, blocking CPU-bound decoding only happens
+  once it's iterated. The code wrapped the `transcribe()` call itself in
+  `asyncio.to_thread`, but then joined the returned segments *outside*
+  that call, back on the event loop -- meaning the one thing
+  `asyncio.to_thread` was there to isolate ran unisolated the entire
+  time, blocking every other concurrent task (VAD framing for the next
+  utterance included) for the whole transcription. Caught live: a real
+  call where the caller's speech was picked up (VAD/turn-detection fired
+  correctly) but transcripts kept coming back empty, which the LLM then
+  correctly but unhelpfully interpreted as "I can't hear you" -- in
+  English, since there was never any real caller text to detect a
+  language from, which is what actually caused replies to stay in
+  English regardless of what language was spoken (not a language-
+  detection bug). Fixed by consuming the generator inside the same
+  `asyncio.to_thread` worker function that calls `transcribe()`, so all
+  of the decoding work stays off the event loop. Regression test fakes a
+  genuinely lazy generator and records which thread drives it -- fails
+  against the old code, passes against the fix.
+
 ### Added — Phase 1.3: streaming LLM → TTS
 
 The last big latency lever: previously `llm_node` awaited the *entire*

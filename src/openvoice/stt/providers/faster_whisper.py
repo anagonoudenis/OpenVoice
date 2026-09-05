@@ -9,9 +9,19 @@ imports it) never requires the extra to be installed unless a provider is
 actually constructed from real settings. Tests inject a fake model via the
 plain constructor instead.
 
-faster-whisper's `transcribe()` is a blocking, CPU-bound call — it always
-runs via `asyncio.to_thread` so it never blocks the event loop serving a
-live call.
+faster-whisper's `transcribe()` returns almost instantly with a *lazy*
+generator: the actual blocking, CPU-bound decoding only happens once
+it's iterated, not when `transcribe()` is called. Both the call and the
+iteration that consumes it are run inside the same `asyncio.to_thread`
+worker function (see `_transcribe` below) so none of that work runs on
+the event loop -- doing the iteration outside the thread call, which
+this module used to do, silently defeats the entire point of
+`asyncio.to_thread` and was caught by an actual live call going
+mysteriously quiet (empty transcripts) rather than merely slow, likely
+because ctranslate2's own execution engine has thread-affinity
+expectations `asyncio.to_thread`'s worker-thread reuse can violate when
+the generator is driven from a different thread than the one that
+created it.
 """
 
 import asyncio
@@ -70,11 +80,25 @@ class FasterWhisperSTTProvider(BaseSTTProvider):
 
         audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
+        def _transcribe() -> str:
+            # `model.transcribe()` returns almost immediately with a *lazy*
+            # generator -- the actual CPU-bound Whisper decoding only runs
+            # once it's iterated. Consuming it here, inside this function
+            # (which `asyncio.to_thread` runs in a worker thread), keeps
+            # *all* of that work off the event loop. Joining the segments
+            # outside this function -- which is what this code used to do
+            # -- runs the real transcription work back on the event loop
+            # instead, blocking every other concurrent call (VAD framing,
+            # other utterances, ...) for the whole transcription: silently
+            # defeating the entire point of `asyncio.to_thread`, and -- since
+            # ctranslate2's execution engine has its own internal threading
+            # model -- a plausible source of the transcript coming back
+            # empty or wrong rather than merely slow.
+            segments, _info = self._model.transcribe(audio, language=self._language)
+            return "".join(segment.text for segment in segments)
+
         try:
-            segments, _info = await asyncio.to_thread(
-                self._model.transcribe, audio, language=self._language
-            )
-            text = "".join(segment.text for segment in segments)
+            text = await asyncio.to_thread(_transcribe)
         except Exception as exc:  # any faster-whisper/ctranslate2 failure becomes STTError
             logger.error("faster_whisper_transcribe_failed", error=str(exc))
             raise STTError(f"faster-whisper transcription failed: {exc}") from exc
